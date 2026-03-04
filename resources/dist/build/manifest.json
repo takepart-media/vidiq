@@ -1,0 +1,8 @@
+{
+  "resources/js/addon_cp.js": {
+    "file": "assets/addon_cp-CFGfxWY4.js",
+    "name": "addon_cp",
+    "src": "resources/js/addon_cp.js",
+    "isEntry": true
+  }
+}

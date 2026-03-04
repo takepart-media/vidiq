@@ -1,0 +1,71 @@
+{
+    "name": "takepart-media/vidiq",
+    "description": "Statamic addon for 3q.video hosting platform integration",
+    "keywords": [
+        "statamic",
+        "addon",
+        "3q",
+        "3q.video",
+        "video",
+        "flysystem",
+        "asset"
+    ],
+    "type": "statamic-addon",
+    "license": "MIT",
+    "homepage": "https://github.com/takepart-media/vidiq",
+    "authors": [
+        {
+            "name": "Jakob Plöns",
+            "email": "jploens@takepart-media.de",
+            "homepage": "https://takepart-media.de",
+            "role": "Head of Web Development"
+        },
+        {
+            "name": "Dennis Dick",
+            "email": "dick@takepart-media.de",
+            "homepage": "https://takepart-media.de",
+            "role": "Developer"
+        },
+        {
+            "name": "Gabor Kiss",
+            "email": "kiss@takepart-media.de",
+            "homepage": "https://takepart-media.de",
+            "role": "Developer"
+        }
+    ],
+    "support": {
+        "email": "it@takepart-media.de",
+        "issues": "https://github.com/takepart-media/vidiq/issues",
+        "source": "https://github.com/takepart-media/vidiq"
+    },
+    "require": {
+        "php": "^8.3",
+        "statamic/cms": "^5.0",
+        "guzzlehttp/guzzle": "^7.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0",
+        "orchestra/testbench": "^9.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "TakepartMedia\\Vidiq\\": "src"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "TakepartMedia\\Vidiq\\Tests\\": "tests"
+        }
+    },
+    "extra": {
+        "statamic": {
+            "name": "vidiQ",
+            "description": "3q.video hosting platform integration for Statamic"
+        },
+        "laravel": {
+            "providers": [
+                "TakepartMedia\\Vidiq\\ServiceProvider"
+            ]
+        }
+    }
+}
