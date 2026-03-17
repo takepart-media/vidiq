@@ -435,8 +435,13 @@ class ThreeQAdapter implements FilesystemAdapter
     public function fileSize(string $path): FileAttributes
     {
         $data = $this->getCachedFileData($path);
+        $size = $data['size'] ?? null;
 
-        return new FileAttributes($path, $data['size'] ?? null);
+        if ($size === null) {
+            throw UnableToRetrieveMetadata::fileSize($path, 'file is still being encoded on 3q.video');
+        }
+
+        return new FileAttributes($path, $size);
     }
 
     // =========================================================================
@@ -487,6 +492,10 @@ class ThreeQAdapter implements FilesystemAdapter
 
                 $filePath = $this->makeUniquePath($title ?: $name, $fileId, $usedPaths);
                 $usedPaths[] = $filePath;
+
+                if ($size === null) {
+                    continue;
+                }
 
                 $listing[$filePath] = [
                     'id' => $fileId,
