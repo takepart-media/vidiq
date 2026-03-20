@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Storage;
 use League\Flysystem\Filesystem;
 use Statamic\Providers\AddonServiceProvider;
 use TakepartMedia\Vidiq\Adapters\ThreeQAdapter;
+use TakepartMedia\Vidiq\Console\Commands\WarmCacheCommand;
 
 class ServiceProvider extends AddonServiceProvider
 {
@@ -19,6 +20,10 @@ class ServiceProvider extends AddonServiceProvider
     protected $vite = [
         'input' => ['resources/js/addon_cp.js'],
         'publicDirectory' => 'resources/dist',
+    ];
+
+    protected $commands = [
+        WarmCacheCommand::class,
     ];
 
     /**

@@ -453,26 +453,41 @@ class ThreeQAdapter implements FilesystemAdapter
      *
      * Returns an array keyed by the sanitized asset path ("{name}.jpg").
      *
+     * @param  bool  $force  When true, bypass the cache and always fetch from the API.
      * @return array<string, array{id: string, name: string, title: string, thumbnail_url: string|null, size: int|null, timestamp: int|null}>
      */
-    private function fetchListing(): array
+    public function fetchListing(bool $force = false): array
     {
-        $cached = Cache::get($this->cacheKey('listing'));
+        if (! $force) {
+            $cached = Cache::get($this->cacheKey('listing'));
 
-        if ($cached !== null) {
-            return $cached;
+            if ($cached !== null) {
+                return $cached;
+            }
         }
 
         try {
-            $response = $this->client->get("v2/projects/{$this->projectId}/files", [
-                'query' => [
-                    'IncludeMetadata' => 'true',
-                    'IncludeProperties' => 'true',
-                ],
-            ]);
+            $files = [];
+            $offset = 0;
+            $limit = 100;
 
-            $data = json_decode($response->getBody()->getContents(), true);
-            $files = $data['Files'] ?? [];
+            do {
+                $response = $this->client->get("v2/projects/{$this->projectId}/files", [
+                    'query' => [
+                        'IncludeMetadata' => 'true',
+                        'IncludeProperties' => 'true',
+                        'Limit' => $limit,
+                        'Offset' => $offset,
+                    ],
+                ]);
+
+                $data = json_decode($response->getBody()->getContents(), true);
+                $batch = $data['Files'] ?? [];
+                $totalCount = $data['TotalCount'] ?? 0;
+
+                $files = array_merge($files, $batch);
+                $offset += $limit;
+            } while ($offset < $totalCount);
 
             $listing = [];
             $usedPaths = [];
@@ -534,7 +549,7 @@ class ThreeQAdapter implements FilesystemAdapter
             $listing = Cache::get($this->cacheKey('listing')) ?? [];
         }
 
-        return $listing[$path] ?? [];
+        return $listing[$path] ?? $listing[$path.'.jpg'] ?? [];
     }
 
     /**
@@ -655,6 +670,39 @@ class ThreeQAdapter implements FilesystemAdapter
         return str_ends_with($withoutPrefix, self::META_SUFFIX)
             ? substr($withoutPrefix, 0, -strlen(self::META_SUFFIX))
             : $withoutPrefix;
+    }
+
+    /**
+     * Flush all vidiq cache entries for this project (listing, embed codes, meta edits).
+     *
+     * @return int The number of cache keys that were flushed.
+     */
+    public function flushCache(): int
+    {
+        $flushed = 0;
+
+        // Get the current listing to discover all per-file cache keys.
+        $listing = Cache::get($this->cacheKey('listing')) ?? [];
+
+        // Forget embed-code and meta-edit keys derived from the listing.
+        foreach ($listing as $path => $fileData) {
+            $fileId = $fileData['id'] ?? null;
+
+            if ($fileId) {
+                Cache::forget($this->cacheKey("embed_codes.{$fileId}"));
+                $flushed++;
+            }
+
+            $metaPath = self::META_PREFIX.$path.self::META_SUFFIX;
+            Cache::forget($this->metaEditCacheKey($metaPath));
+            $flushed++;
+        }
+
+        // Forget the listing itself.
+        Cache::forget($this->cacheKey('listing'));
+        $flushed++;
+
+        return $flushed;
     }
 
     /**

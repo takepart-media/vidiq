@@ -4,4 +4,6 @@
 Thumbs.db
 *.log
 .env
+.idea
 .phpunit.result.cache
+.vscode
