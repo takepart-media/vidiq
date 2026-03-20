@@ -16,6 +16,7 @@ This addon has only been tested with **Statamic 5** and **3Q's SDN API v2**.
 - **Asset browser integration** — 3Q videos appear in Statamic's CP file browser with thumbnail previews
 - **Read-only (for now)** — browse videos directly from the CP; write operations (upload, delete, rename, move) are
   currently unsupported — manage content in 3Q's own dashboard. Full write support may be added in a future release.
+- **Cache warm-up command** — `vidiq:warm-cache` Artisan command pre-populates listing and embed-code caches during deployment
 - **Flysystem v3 adapter** — custom `ThreeQAdapter` implements the Flysystem interface backed by the 3Q SDN API
 - **Embed codes** — fetches the full `FileEmbedCodes` array per video via the 3Q playout API (cached)
 - **Virtual meta files** — generates `.meta/` YAML on the fly so Statamic stores title, thumbnail URL and video ID
@@ -215,10 +216,26 @@ npm run build    # Production build
 
 ### Cache management
 
+#### Warm the cache
+
+Pre-populate the video listing cache (and optionally embed codes) so the first frontend request avoids an API round-trip:
+
 ```bash
-php artisan statamic:stache:clear   # Clear Statamic file cache
-php artisan config:clear            # Clear Laravel config cache
+php artisan vidiq:warm-cache           # Warm listing cache only
+php artisan vidiq:warm-cache --embed   # Also pre-fetch embed codes for every video
 ```
+
+This is intended to run once during deployment (e.g. in a post-deploy script or CI pipeline).
+
+#### Flush caches
+
+```bash
+php artisan cache:clear                # Flush all Laravel caches (including vidiq)
+php artisan statamic:stache:clear      # Clear Statamic file cache
+php artisan config:clear               # Clear Laravel config cache
+```
+
+The `vidiq:warm-cache` command automatically flushes all vidiq-specific cache entries (listing, embed codes, meta edits) before re-populating.
 
 ## License
 
