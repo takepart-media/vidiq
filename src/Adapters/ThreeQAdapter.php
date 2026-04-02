@@ -37,13 +37,16 @@ class ThreeQAdapter implements FilesystemAdapter
 
     private const string META_SUFFIX = '.yaml';
 
-    private const int CACHE_TTL = 600; // 10 minutes
+    private const int CACHE_TTL = 3600; // 1 hour
 
     private const string CACHE_KEY_PREFIX = 'vidiq';
 
     private Client $client;
 
     private Client $downloadClient;
+
+    /** @var array<string, array<string, mixed>>|null In-memory listing cache to avoid repeated Cache::get() deserialization. */
+    private ?array $listingMemory = null;
 
     /**
      * @param  string  $apiToken  3Q API authentication token.
@@ -459,9 +462,15 @@ class ThreeQAdapter implements FilesystemAdapter
     public function fetchListing(bool $force = false): array
     {
         if (! $force) {
+            if ($this->listingMemory !== null) {
+                return $this->listingMemory;
+            }
+
             $cached = Cache::get($this->cacheKey('listing'));
 
             if ($cached !== null) {
+                $this->listingMemory = $cached;
+
                 return $cached;
             }
         }
@@ -524,6 +533,7 @@ class ThreeQAdapter implements FilesystemAdapter
             }
 
             Cache::put($this->cacheKey('listing'), $listing, self::CACHE_TTL);
+            $this->listingMemory = $listing;
 
             return $listing;
         } catch (GuzzleException $e) {
@@ -541,15 +551,17 @@ class ThreeQAdapter implements FilesystemAdapter
      */
     private function getCachedFileData(string $path): array
     {
-        $listing = Cache::get($this->cacheKey('listing'));
+        if ($this->listingMemory === null) {
+            $this->listingMemory = Cache::get($this->cacheKey('listing'));
 
-        if ($listing === null) {
-            // Populate cache as a side effect of consuming the generator.
-            iterator_to_array($this->listContents('/', false));
-            $listing = Cache::get($this->cacheKey('listing')) ?? [];
+            if ($this->listingMemory === null) {
+                // Populate cache as a side effect of consuming the generator.
+                iterator_to_array($this->listContents('/', false));
+                $this->listingMemory = Cache::get($this->cacheKey('listing')) ?? [];
+            }
         }
 
-        return $listing[$path] ?? $listing[$path.'.jpg'] ?? [];
+        return $this->listingMemory[$path] ?? $this->listingMemory[$path.'.jpg'] ?? [];
     }
 
     /**
@@ -680,6 +692,7 @@ class ThreeQAdapter implements FilesystemAdapter
     public function flushCache(): int
     {
         $flushed = 0;
+        $this->listingMemory = null;
 
         // Get the current listing to discover all per-file cache keys.
         $listing = Cache::get($this->cacheKey('listing')) ?? [];

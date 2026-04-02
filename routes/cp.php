@@ -1,9 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use TakepartMedia\Vidiq\Http\Controllers\AssetsController;
+use TakepartMedia\Vidiq\Http\Controllers\VidiQAssetsController;
 
 Route::prefix('vidiq')->group(function () {
-    Route::get('assets', [AssetsController::class, 'thumbnails'])->name('vidiq.assets');
-    Route::get('player-url', [AssetsController::class, 'playerUrl'])->name('vidiq.player-url');
+    Route::get('assets', [VidiQAssetsController::class, 'thumbnails'])->name('vidiq.assets');
+    Route::get('player-url', [VidiQAssetsController::class, 'playerUrl'])->name('vidiq.player-url');
 });

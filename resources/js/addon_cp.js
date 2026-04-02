@@ -17,6 +17,19 @@ const statusMap = {};
 /** Player URL set by interceptor when an editor modal opens for a vidiq video. */
 let pendingPlayerUrl = null;
 
+/** Fieldtype instances that have already been fixed (prevents re-triggering loadAssets). */
+const fixedFieldtypes = new WeakSet();
+
+/** Whether the initial fieldtype fix pass has completed. */
+let initialFixDone = false;
+
+/**
+ * Fetch thumbnail/status data from the vidiq assets endpoint.
+ * Uses a singleton promise so only one HTTP request is made per page load.
+ *
+ * @param {object} axios - The Axios instance to use for the request.
+ * @returns {Promise<object>} The asset data keyed by container handle.
+ */
 function loadAssetData(axios) {
     if (assetDataFetch) {
         return assetDataFetch;
@@ -37,7 +50,12 @@ function loadAssetData(axios) {
     return assetDataFetch;
 }
 
-/** Overlay a coloured left strip on the thumbnail's direct parent. */
+/**
+ * Overlay a coloured left strip on the thumbnail's direct parent.
+ *
+ * @param {HTMLImageElement} imgEl - The thumbnail image element.
+ * @param {string} status - The release status (published, unpublished, draft).
+ */
 function injectStatusColor(imgEl, status) {
     const container = imgEl.parentElement;
     if (!container || container.querySelector(".vidiq-status-indicator")) {
@@ -62,7 +80,9 @@ function injectStatusColor(imgEl, status) {
     container.appendChild(strip);
 }
 
-/** Replace <video> in the asset editor with a 3Q player iframe using pendingPlayerUrl. */
+/**
+ * Replace <video> in the asset editor with a 3Q player iframe using pendingPlayerUrl.
+ */
 function tryInjectVideoPlayers() {
     if (!pendingPlayerUrl) {
         return;
@@ -84,7 +104,9 @@ function tryInjectVideoPlayers() {
     pendingPlayerUrl = null;
 }
 
-/** Match img.asset-thumbnail src against statusMap and inject strips. */
+/**
+ * Match img.asset-thumbnail src against statusMap and inject strips.
+ */
 function tryInjectStatusColors() {
     if (!Object.keys(statusMap).length) {
         return;
@@ -105,8 +127,16 @@ function tryInjectStatusColors() {
     });
 }
 
-/** On initial entry-form load, re-trigger loadAssets() for vidiq AssetRow instances missing thumbnails. */
+/**
+ * On initial entry-form load, re-trigger loadAssets() for vidiq AssetRow
+ * instances missing thumbnails. Each fieldtype is only fixed once.
+ */
 function fixFieldtypeInitialLoad() {
+    if (initialFixDone) {
+        return;
+    }
+
+    let hasVidiqTrs = false;
     const fieldtypesToFix = new Set();
 
     document.querySelectorAll("tr").forEach((tr) => {
@@ -121,7 +151,13 @@ function fixFieldtypeInitialLoad() {
         }
 
         const container = vm.asset.id.substring(0, colonPos);
-        if (!vidiqContainers.has(container) || vm.asset.isImage) {
+        if (!vidiqContainers.has(container)) {
+            return;
+        }
+
+        hasVidiqTrs = true;
+
+        if (vm.asset.isImage) {
             return;
         }
 
@@ -129,12 +165,24 @@ function fixFieldtypeInitialLoad() {
         while (parent && !parent.loadAssets) {
             parent = parent.$parent;
         }
-        if (parent?.value?.length) {
+        if (parent?.value?.length && !fixedFieldtypes.has(parent)) {
             fieldtypesToFix.add(parent);
         }
     });
 
-    fieldtypesToFix.forEach((ft) => ft.loadAssets(ft.value));
+    if (fieldtypesToFix.size === 0) {
+        // Only mark done once we've actually seen vidiq asset rows.
+        // Before that, the entry form may not have rendered yet.
+        if (hasVidiqTrs) {
+            initialFixDone = true;
+        }
+        return;
+    }
+
+    fieldtypesToFix.forEach((ft) => {
+        fixedFieldtypes.add(ft);
+        ft.loadAssets(ft.value);
+    });
 }
 
 let fixTimer = null;
@@ -142,8 +190,11 @@ let fixTimer = null;
 const domObserver = new MutationObserver(() => {
     tryInjectStatusColors();
     tryInjectVideoPlayers();
-    clearTimeout(fixTimer);
-    fixTimer = setTimeout(fixFieldtypeInitialLoad, 300);
+
+    if (!initialFixDone) {
+        clearTimeout(fixTimer);
+        fixTimer = setTimeout(fixFieldtypeInitialLoad, 300);
+    }
 });
 
 Statamic.booted(() => {
@@ -151,6 +202,10 @@ Statamic.booted(() => {
     if (!axios) {
         return;
     }
+
+    // Eagerly load asset data so vidiqContainers is populated
+    // before fixFieldtypeInitialLoad() runs.
+    loadAssetData(axios);
 
     domObserver.observe(document.body, { childList: true, subtree: true });
 
@@ -164,12 +219,23 @@ Statamic.booted(() => {
             return response;
         }
 
+        // Only fetch asset data for URLs that actually need vidiq enrichment.
+        const isFolderBrowse = url.match(
+            /\/assets\/browse\/folders\/([^/?]+)/,
+        );
+        const isAssetEditor =
+            url.match(/\/assets\/[^/]+$/) && response.data?.data?.id;
+        const isFieldtype = url.includes("/assets-fieldtype");
+
+        if (!isFolderBrowse && !isAssetEditor && !isFieldtype) {
+            return response;
+        }
+
         const assetData = await loadAssetData(axios);
 
         // Asset browser folder listing
-        const folderMatch = url.match(/\/assets\/browse\/folders\/([^/?]+)/);
-        if (folderMatch) {
-            const container = folderMatch[1];
+        if (isFolderBrowse) {
+            const container = isFolderBrowse[1];
             if (!vidiqContainers.has(container)) {
                 return response;
             }
@@ -206,7 +272,7 @@ Statamic.booted(() => {
         }
 
         // Asset editor modal (/cp/assets/{base64-id}): fetch + store player URL
-        if (url.match(/\/assets\/[^/]+$/) && response.data?.data?.id) {
+        if (isAssetEditor) {
             const asset = response.data.data;
             const colonPos = asset.id?.indexOf("::") ?? -1;
             const container =
@@ -227,7 +293,7 @@ Statamic.booted(() => {
         }
 
         // Assets fieldtype row display
-        if (url.includes("/assets-fieldtype")) {
+        if (isFieldtype) {
             const assets = Array.isArray(response.data) ? response.data : null;
             if (!assets?.length) {
                 return response;

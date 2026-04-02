@@ -5,11 +5,10 @@ namespace TakepartMedia\Vidiq\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Statamic\Facades\AssetContainer;
 
-class AssetsController extends Controller
+class VidiQAssetsController extends Controller
 {
     /**
      * Return thumbnail URLs and release statuses for all assets in 3Q-backed containers.
@@ -29,14 +28,7 @@ class AssetsController extends Controller
                 return;
             }
 
-            $projectId = config("filesystems.disks.{$diskName}.project_id", '');
-            $cacheKey = "vidiq.{$projectId}.listing";
-
-            if (Cache::get($cacheKey) === null) {
-                Storage::disk($diskName)->files('/');
-            }
-
-            $listing = Cache::get($cacheKey) ?? [];
+            $listing = Storage::disk($diskName)->getAdapter()->fetchListing();
 
             $result[$container->handle()] = collect($listing)
                 ->map(fn (array $data) => [
