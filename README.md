@@ -13,19 +13,22 @@ This addon has only been tested with **Statamic 5** and **3Q's SDN API v2**.
 
 ## Features
 
-- **Asset browser integration** — 3Q videos appear in Statamic's CP file browser with thumbnail previews
+- **Asset browser integration** — 3Q videos appear in Statamic's CP file browser with thumbnail previews and release-status colour strips (published / unpublished / draft)
+- **Asset editor player** — opening a video in the CP asset editor replaces the default `<video>` element with the 3Q player iframe
+- **Fieldtype support** — videos selected via an Assets fieldtype display thumbnails and status indicators in entry forms
 - **Read-only (for now)** — browse videos directly from the CP; write operations (upload, delete, rename, move) are
   currently unsupported — manage content in 3Q's own dashboard. Full write support may be added in a future release.
+- **CP Cache Utility** — manage the vidiq cache directly from the Statamic Control Panel (Utilities → vidiQ Cache) with Warm and Clear buttons
 - **Cache warm-up command** — `vidiq:warm-cache` Artisan command pre-populates listing and embed-code caches during deployment
 - **Flysystem v3 adapter** — custom `ThreeQAdapter` implements the Flysystem interface backed by the 3Q SDN API
 - **Embed codes** — fetches the full `FileEmbedCodes` array per video via the 3Q playout API (cached)
-- **Virtual meta files** — generates `.meta/` YAML on the fly so Statamic stores title, thumbnail URL and video ID
-  without writing to disk
+- **Virtual meta files** — generates `.meta/` YAML on the fly so Statamic stores title, thumbnail URL, video ID and
+  release status without writing to disk
 - **Blade component** — `<x-vidiq::embed>` for embedding the 3Q player in frontend templates
 
 ## Requirements
 
-- PHP 8.2+
+- PHP 8.3+
 - Statamic 5.x
 - GuzzleHTTP 7.x
 - A [3q.video](https://3q.video) account with API access
@@ -77,9 +80,10 @@ The adapter connects to the 3Q SDN REST API and implements `League\Flysystem\Fil
 
 | Operation                                            | Behaviour                                                                                                                       |
 |------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| `listContents`                                       | Fetches all files from `GET /v2/projects/{id}/files` and yields `FileAttributes`. Listing is cached for 10 minutes.             |
+| `listContents`                                       | Fetches all files from `GET /v2/projects/{id}/files` and yields `FileAttributes`. Listing is cached for 1 hour by default (configurable via `VIDIQ_CACHE_TTL`). |
 | `fileExists`                                         | Resolved from the listing cache.                                                                                                |
-| `read` / `readStream`                                | For `.meta/` paths: returns generated YAML. For asset paths: streams the video thumbnail from 3Q for Statamic/Glide to cache.   |
+| `read`                                               | For `.meta/` paths: returns generated YAML. Direct reads of asset paths are not supported and throw `UnableToReadFile`.          |
+| `readStream`                                         | For `.meta/` paths: streams the generated YAML. For asset paths: downloads the video thumbnail from 3Q for Statamic/Glide to cache. |
 | `delete`                                             | Accepted only for `.meta/` paths (no-op, virtual files have no remote counterpart). All other paths throw `UnableToDeleteFile`. |
 | `getUrl`                                             | Calls `GET /v2/projects/{id}/files/{fileId}/playouts/default/embed` and returns the full `FileEmbedCodes` array (e.g. `JavaScript`, `PlayerURL`). Cached per file ID via `VIDIQ_CACHE_TTL`. |
 | `write` / `writeStream`                              | Accepted only for `.meta/` paths (Statamic metadata edits stored in Laravel cache). All other writes throw `UnableToWriteFile`. |
@@ -102,19 +106,25 @@ data:
   alt: 'Video title'
   thumbnail_url: 'https://...'
   video_id: '12345678'
+  release_status: 'published'
 ```
 
 Statamic reads this file automatically; because the file exists virtually, Statamic skips calling `writeMeta()` and
 leaves the adapter's read-only behaviour intact.
 
-### Thumbnail injection (CP JavaScript)
+### CP JavaScript (thumbnail injection, status strips & player)
 
 Statamic's asset browser only renders thumbnail images for assets where `is_image: true`. The addon registers an Axios
-response interceptor (via `Statamic.booted()`) that:
+response interceptor (via `Statamic.booted()`) that enriches several CP views:
 
-1. Intercepts the folder API response for the `vidiq` container (`GET /cp/assets/browse/folders/vidiq`).
-2. Fetches the thumbnail map from the addon's own endpoint (`GET /cp/vidiq/assets`), once per page load.
-3. Injects `is_image: true` and `thumbnail: <url>` into each asset object before Vue renders the list.
+1. **Asset browser** — intercepts folder listing responses for any 3Q-backed container, fetches the thumbnail & status
+   map from `GET /cp/vidiq/assets` (once per page load), and injects `is_image: true` + `thumbnail: <url>` into each
+   asset object. A coloured left-edge strip is added to each thumbnail to indicate the release status
+   (green = published, yellow = unpublished, grey = draft).
+2. **Asset editor** — when a 3Q video is opened in the editor modal, the default `<video>` element is replaced with a
+   3Q player iframe fetched from `GET /cp/vidiq/player-url`.
+3. **Assets fieldtype** — when an entry form contains an Assets field referencing a 3Q container, the interceptor
+   injects thumbnails and status indicators into the fieldtype row display.
 
 ## Blade Component
 
@@ -152,16 +162,22 @@ Embeds a 3Q video using one of three output methods. The method defaults to the 
 
 | Key                     | Env variable           | Default                     | Description                                                |
 |-------------------------|------------------------|-----------------------------|-------------------------------------------------------------|
-| `api.token`             | `VIDIQ_API_TOKEN`      | —                           | 3Q API token                                               |
-| `api.endpoint`          | `VIDIQ_API_ENDPOINT`   | `https://sdn.3qsdn.com/api` | 3Q API base URL                                            |
-| `api.timeout`           | `VIDIQ_API_TIMEOUT`    | `30`                        | HTTP timeout in seconds                                    |
 | `cache.ttl`             | `VIDIQ_CACHE_TTL`      | `3600`                      | Cache TTL in seconds for listings and embed codes          |
+| `cache.permanent`       | `VIDIQ_CACHE_PERMANENT`| `false`                     | When `true`, caches are stored forever (ignores TTL)       |
+| `cache.prefix`          | —                      | `vidiq`                     | Prefix for all cache keys (scoped per project ID)          |
 | `embed_fallback_method` | `VIDIQ_FALLBACK_METHOD`| `JavaScript`                | Default embed method (`JavaScript`, `iFrame`, `PlayerURL`) |
 
 ### `config/vidiq-disk.php` (addon)
 
 Configures the `3q` Laravel filesystem disk that is registered automatically by the ServiceProvider. The disk uses the
 custom `3q` driver backed by `ThreeQAdapter`.
+
+| Key          | Env variable         | Default                      | Description             |
+|--------------|----------------------|------------------------------|--------------------------|
+| `api_token`  | `VIDIQ_API_TOKEN`    | —                            | 3Q API token             |
+| `project_id` | `VIDIQ_PROJECT_ID`   | —                            | 3Q project identifier    |
+| `endpoint`   | `VIDIQ_API_ENDPOINT` | `https://sdn.3qsdn.com/api` | 3Q API base URL          |
+| `timeout`    | `VIDIQ_API_TIMEOUT`  | `30`                         | HTTP timeout in seconds  |
 
 ## Multiple Projects
 
@@ -216,7 +232,16 @@ npm run build    # Production build
 
 ### Cache management
 
-#### Warm the cache
+#### CP Utility
+
+The addon registers a **vidiQ Cache** utility in the Statamic Control Panel under **Utilities → vidiQ Cache**. It
+displays the number of cached videos and the current cache mode (TTL or Permanent). Two actions are available:
+
+- **Warm** — dispatches a background queue job (`WarmCacheJob`) that flushes all vidiq caches, re-fetches the listing
+  from the 3Q API, and pre-fetches embed codes for every video.
+- **Clear** — immediately flushes all vidiq-specific cache entries (listing, embed codes, meta edits).
+
+#### Warm the cache (CLI)
 
 Pre-populate the video listing cache (and optionally embed codes) so the first frontend request avoids an API round-trip:
 

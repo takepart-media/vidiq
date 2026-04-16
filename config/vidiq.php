@@ -8,6 +8,7 @@ return [
      */
     'cache' => [
         'ttl' => env('VIDIQ_CACHE_TTL', 3600), // 1 hour in seconds
+        'permanent' => env('VIDIQ_CACHE_PERMANENT', false),
         'prefix' => 'vidiq',
     ],
 

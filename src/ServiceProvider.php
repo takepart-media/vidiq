@@ -5,11 +5,14 @@ namespace TakepartMedia\Vidiq;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\FilesystemAdapter;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use League\Flysystem\Filesystem;
+use Statamic\Facades\Utility;
 use Statamic\Providers\AddonServiceProvider;
 use TakepartMedia\Vidiq\Adapters\ThreeQAdapter;
 use TakepartMedia\Vidiq\Console\Commands\WarmCacheCommand;
+use TakepartMedia\Vidiq\Http\Controllers\VidiQCacheController;
 
 class ServiceProvider extends AddonServiceProvider
 {
@@ -43,12 +46,63 @@ class ServiceProvider extends AddonServiceProvider
     }
 
     /**
-     * Boot addon features: register the 3Q disk driver and load Blade views.
+     * Boot addon features: register the 3Q disk driver, views, and CP utility.
      */
     public function bootAddon(): void
     {
         $this->bootDiskDriver();
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'vidiq');
+        $this->bootCacheUtility();
+    }
+
+    /**
+     * Register the vidiq cache utility in the Statamic CP.
+     */
+    protected function bootCacheUtility(): void
+    {
+        Utility::extend(function () {
+            Utility::register('vidiq-cache')
+                ->title('vidiq Cache')
+                ->navTitle('vidiq Cache')
+                ->description(__('Manage the vidiq video listing and embed-code cache.'))
+                ->icon('video')
+                ->view('vidiq::utilities.cache', function () {
+                    $adapter = $this->resolveAdapter();
+                    $listing = $adapter ? Cache::get($adapter->cacheKey('listing'), []) : [];
+                    $permanent = config('vidiq.cache.permanent', false);
+                    $ttl = config('vidiq.cache.ttl', 3600);
+
+                    return [
+                        'videoCount' => count($listing),
+                        'cacheMode' => $permanent ? __('Permanent') : __('TTL'),
+                        'cacheTtl' => $permanent ? null : gmdate('H:i:s', $ttl),
+                    ];
+                })
+                ->routes(function ($router) {
+                    $router->post('warm', [VidiQCacheController::class, 'warm'])->name('warm');
+                    $router->post('clear', [VidiQCacheController::class, 'clear'])->name('clear');
+                });
+        });
+    }
+
+    /**
+     * Resolve the ThreeQAdapter instance from the registered "3q" Storage disk.
+     */
+    protected function resolveAdapter(): ?ThreeQAdapter
+    {
+        try {
+            $disk = Storage::disk('3q');
+        } catch (\Exception) {
+            return null;
+        }
+
+        if (! $disk instanceof FilesystemAdapter) {
+            return null;
+        }
+
+        $adapter = $disk->getAdapter();
+
+        return $adapter instanceof ThreeQAdapter ? $adapter : null;
     }
 
     /**

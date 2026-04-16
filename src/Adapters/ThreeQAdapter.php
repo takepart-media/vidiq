@@ -111,7 +111,7 @@ class ThreeQAdapter implements FilesystemAdapter
             $embedCodes = [];
         }
 
-        Cache::put($cacheKey, $embedCodes, config('vidiq.cache.ttl', self::CACHE_TTL));
+        $this->cacheStore($cacheKey, $embedCodes);
 
         return $embedCodes;
     }
@@ -532,7 +532,7 @@ class ThreeQAdapter implements FilesystemAdapter
                 ];
             }
 
-            Cache::put($this->cacheKey('listing'), $listing, self::CACHE_TTL);
+            $this->cacheStore($this->cacheKey('listing'), $listing);
             $this->listingMemory = $listing;
 
             return $listing;
@@ -719,11 +719,26 @@ class ThreeQAdapter implements FilesystemAdapter
     }
 
     /**
+     * Store a value in cache, using forever or TTL depending on config.
+     *
+     * @param  string  $key  The cache key.
+     * @param  mixed  $value  The value to cache.
+     */
+    private function cacheStore(string $key, mixed $value): void
+    {
+        if (config('vidiq.cache.permanent', false)) {
+            Cache::forever($key, $value);
+        } else {
+            Cache::put($key, $value, config('vidiq.cache.ttl', self::CACHE_TTL));
+        }
+    }
+
+    /**
      * Build a namespaced cache key scoped to this adapter's project ID.
      *
      * @param  string  $key  The key suffix to namespace.
      */
-    private function cacheKey(string $key): string
+    public function cacheKey(string $key): string
     {
         $cachePrefix = config('vidiq.cache.prefix', self::CACHE_KEY_PREFIX);
 
