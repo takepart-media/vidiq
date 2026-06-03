@@ -2,6 +2,7 @@
 
 namespace TakepartMedia\Vidiq;
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\FilesystemAdapter;
@@ -43,6 +44,26 @@ class ServiceProvider extends AddonServiceProvider
             'filesystems.disks.3q',
             $this->app->make('config')->get('vidiq-disk.3q', [])
         );
+
+        $this->registerCacheStore();
+    }
+
+    /**
+     * Ensure the dedicated, isolated vidiq cache store exists. When the
+     * configured store is the default "vidiq" and the app hasn't defined one,
+     * register a file-based store so a global `cache:clear` can't wipe it.
+     */
+    protected function registerCacheStore(): void
+    {
+        $config = $this->app->make('config');
+        $store = $config->get('vidiq.cache.store');
+
+        if ($store === 'vidiq' && ! $config->get('cache.stores.vidiq')) {
+            $config->set('cache.stores.vidiq', [
+                'driver' => 'file',
+                'path' => storage_path('framework/cache/vidiq'),
+            ]);
+        }
     }
 
     /**
@@ -53,6 +74,29 @@ class ServiceProvider extends AddonServiceProvider
         $this->bootDiskDriver();
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'vidiq');
         $this->bootCacheUtility();
+        $this->scheduleRefresh();
+    }
+
+    /**
+     * Self-register a nightly cache refresh so consumers get warm caches out of
+     * the box. Disabled when `vidiq.schedule.refresh_at` is null/false.
+     */
+    protected function scheduleRefresh(): void
+    {
+        $time = config('vidiq.schedule.refresh_at');
+
+        if (! $time) {
+            return;
+        }
+
+        $this->app->booted(function () use ($time) {
+            $this->app->make(Schedule::class)
+                ->command('vidiq:warm-cache')
+                ->dailyAt($time)
+                ->withoutOverlapping(15)
+                ->onOneServer()
+                ->runInBackground();
+        });
     }
 
     /**
@@ -68,7 +112,8 @@ class ServiceProvider extends AddonServiceProvider
                 ->icon('video')
                 ->view('vidiq::utilities.cache', function () {
                     $adapter = $this->resolveAdapter();
-                    $listing = $adapter ? Cache::get($adapter->cacheKey('listing'), []) : [];
+                    $store = Cache::store(config('vidiq.cache.store') ?: null);
+                    $listing = $adapter ? $store->get($adapter->cacheKey('listing'), []) : [];
                     $permanent = config('vidiq.cache.permanent', false);
                     $ttl = config('vidiq.cache.ttl', 3600);
 

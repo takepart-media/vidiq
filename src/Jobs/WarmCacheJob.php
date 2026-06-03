@@ -29,11 +29,12 @@ class WarmCacheJob implements ShouldQueue
             return;
         }
 
-        $adapter->flushCache();
+        // Refresh in place (overwrite), without flushing first, so concurrent
+        // requests keep serving the existing cache with no cold gap.
         $listing = $adapter->fetchListing(force: true);
 
         foreach (array_keys($listing) as $path) {
-            $adapter->getUrl($path);
+            $adapter->getUrl($path, force: true);
         }
     }
 

@@ -18,6 +18,7 @@ use League\Flysystem\UnableToReadFile;
 use League\Flysystem\UnableToRetrieveMetadata;
 use League\Flysystem\UnableToWriteFile;
 use League\Flysystem\Visibility;
+use TakepartMedia\Vidiq\Jobs\WarmCacheJob;
 
 /**
  * Flysystem v3 adapter for the 3q. Video API.
@@ -45,7 +46,7 @@ class ThreeQAdapter implements FilesystemAdapter
 
     private Client $downloadClient;
 
-    /** @var array<string, array<string, mixed>>|null In-memory listing cache to avoid repeated Cache::get() deserialization. */
+    /** @var array<string, array<string, mixed>>|null In-memory listing cache to avoid repeated $this->cache()->get() deserialization. */
     private ?array $listingMemory = null;
 
     /**
@@ -84,7 +85,7 @@ class ThreeQAdapter implements FilesystemAdapter
      *
      * @throws FilesystemException
      */
-    public function getUrl(string $path): array
+    public function getUrl(string $path, bool $force = false): array
     {
         // Resolve FileId from listing cache (path is the sanitized display name,
         // not the FileId, so we must look it up).
@@ -95,10 +96,13 @@ class ThreeQAdapter implements FilesystemAdapter
         }
 
         $cacheKey = $this->cacheKey("embed_codes.{$fileId}");
-        $cached = Cache::get($cacheKey);
 
-        if ($cached !== null) {
-            return $cached;
+        if (! $force) {
+            $cached = $this->cache()->get($cacheKey);
+
+            if ($cached !== null) {
+                return $cached;
+            }
         }
 
         try {
@@ -259,7 +263,7 @@ class ThreeQAdapter implements FilesystemAdapter
     {
         if ($this->isMetaPath($path)) {
             // Persist edited meta so subsequent reads return the updated data.
-            Cache::put($this->metaEditCacheKey($path), $contents, self::CACHE_TTL * 24 * 7);
+            $this->cache()->put($this->metaEditCacheKey($path), $contents, self::CACHE_TTL * 24 * 7);
 
             return;
         }
@@ -280,7 +284,7 @@ class ThreeQAdapter implements FilesystemAdapter
     {
         if ($this->isMetaPath($path)) {
             $content = is_resource($contents) ? stream_get_contents($contents) : $contents;
-            Cache::put($this->metaEditCacheKey($path), $content, self::CACHE_TTL * 24 * 7);
+            $this->cache()->put($this->metaEditCacheKey($path), $content, self::CACHE_TTL * 24 * 7);
 
             return;
         }
@@ -466,10 +470,11 @@ class ThreeQAdapter implements FilesystemAdapter
                 return $this->listingMemory;
             }
 
-            $cached = Cache::get($this->cacheKey('listing'));
+            $cached = $this->cache()->get($this->cacheKey('listing'));
 
             if ($cached !== null) {
                 $this->listingMemory = $cached;
+                $this->revalidateIfStale();
 
                 return $cached;
             }
@@ -533,6 +538,7 @@ class ThreeQAdapter implements FilesystemAdapter
             }
 
             $this->cacheStore($this->cacheKey('listing'), $listing);
+            $this->cache()->forever($this->cacheKey('listing.refreshed_at'), time());
             $this->listingMemory = $listing;
 
             return $listing;
@@ -552,12 +558,12 @@ class ThreeQAdapter implements FilesystemAdapter
     private function getCachedFileData(string $path): array
     {
         if ($this->listingMemory === null) {
-            $this->listingMemory = Cache::get($this->cacheKey('listing'));
+            $this->listingMemory = $this->cache()->get($this->cacheKey('listing'));
 
             if ($this->listingMemory === null) {
                 // Populate cache as a side effect of consuming the generator.
                 iterator_to_array($this->listContents('/', false));
-                $this->listingMemory = Cache::get($this->cacheKey('listing')) ?? [];
+                $this->listingMemory = $this->cache()->get($this->cacheKey('listing')) ?? [];
             }
         }
 
@@ -644,7 +650,7 @@ class ThreeQAdapter implements FilesystemAdapter
      */
     private function readMetaYaml(string $metaPath): string
     {
-        $edited = Cache::get($this->metaEditCacheKey($metaPath));
+        $edited = $this->cache()->get($this->metaEditCacheKey($metaPath));
 
         if ($edited !== null) {
             return $edited;
@@ -695,27 +701,61 @@ class ThreeQAdapter implements FilesystemAdapter
         $this->listingMemory = null;
 
         // Get the current listing to discover all per-file cache keys.
-        $listing = Cache::get($this->cacheKey('listing')) ?? [];
+        $listing = $this->cache()->get($this->cacheKey('listing')) ?? [];
 
         // Forget embed-code and meta-edit keys derived from the listing.
         foreach ($listing as $path => $fileData) {
             $fileId = $fileData['id'] ?? null;
 
             if ($fileId) {
-                Cache::forget($this->cacheKey("embed_codes.{$fileId}"));
+                $this->cache()->forget($this->cacheKey("embed_codes.{$fileId}"));
                 $flushed++;
             }
 
             $metaPath = self::META_PREFIX.$path.self::META_SUFFIX;
-            Cache::forget($this->metaEditCacheKey($metaPath));
+            $this->cache()->forget($this->metaEditCacheKey($metaPath));
             $flushed++;
         }
 
         // Forget the listing itself.
-        Cache::forget($this->cacheKey('listing'));
+        $this->cache()->forget($this->cacheKey('listing'));
         $flushed++;
 
         return $flushed;
+    }
+
+    /**
+     * The cache repository vidiq uses — an isolated store (see config) so a
+     * global `cache:clear` doesn't wipe the listing and force a blocking refetch.
+     */
+    private function cache(): \Illuminate\Contracts\Cache\Repository
+    {
+        return Cache::store(config('vidiq.cache.store') ?: null);
+    }
+
+    /**
+     * Stale-while-revalidate: when the cached listing is older than the
+     * configured window, dispatch a background refresh *after the response* so
+     * the current request keeps serving the cached (stale) data without blocking.
+     */
+    private function revalidateIfStale(): void
+    {
+        $refreshAfter = (int) config('vidiq.cache.refresh_after', 0);
+
+        if ($refreshAfter <= 0) {
+            return;
+        }
+
+        $refreshedAt = (int) $this->cache()->get($this->cacheKey('listing.refreshed_at'), 0);
+
+        if ($refreshedAt > 0 && (time() - $refreshedAt) < $refreshAfter) {
+            return;
+        }
+
+        // Dedupe concurrent revalidations; the lock clears once the refresh runs.
+        if ($this->cache()->add($this->cacheKey('listing.revalidating'), 1, 300)) {
+            WarmCacheJob::dispatch()->afterResponse();
+        }
     }
 
     /**
@@ -726,10 +766,10 @@ class ThreeQAdapter implements FilesystemAdapter
      */
     private function cacheStore(string $key, mixed $value): void
     {
-        if (config('vidiq.cache.permanent', false)) {
-            Cache::forever($key, $value);
+        if (config('vidiq.cache.permanent', true)) {
+            $this->cache()->forever($key, $value);
         } else {
-            Cache::put($key, $value, config('vidiq.cache.ttl', self::CACHE_TTL));
+            $this->cache()->put($key, $value, config('vidiq.cache.ttl', self::CACHE_TTL));
         }
     }
 
