@@ -17,6 +17,9 @@ use TakepartMedia\Vidiq\Http\Controllers\VidiQCacheController;
 
 class ServiceProvider extends AddonServiceProvider
 {
+    /** Guards against registering the nightly schedule more than once per process. */
+    protected static bool $scheduleRegistered = false;
+
     protected $routes = [
         'cp' => __DIR__.'/../routes/cp.php',
     ];
@@ -85,13 +88,14 @@ class ServiceProvider extends AddonServiceProvider
     {
         $time = config('vidiq.schedule.refresh_at');
 
-        if (! $time) {
+        if (! $time || self::$scheduleRegistered) {
             return;
         }
 
-        $this->app->booted(function () use ($time) {
-            $this->app->make(Schedule::class)
-                ->command('vidiq:warm-cache')
+        self::$scheduleRegistered = true;
+
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule) use ($time) {
+            $schedule->command('vidiq:warm-cache')
                 ->dailyAt($time)
                 ->withoutOverlapping(15)
                 ->onOneServer()
