@@ -198,7 +198,13 @@ const domObserver = new MutationObserver(() => {
 });
 
 Statamic.booted(() => {
-    const axios = Vue.prototype.$axios;
+    // Statamic 6 (Vue 3): the CP axios lives on the Vue app's globalProperties
+    // (what `this.$axios` resolves to in components). Vue.prototype is gone.
+    // Fall back to older locations for Statamic 5 compatibility.
+    const axios =
+        Statamic.$app?.config?.globalProperties?.$axios ??
+        Statamic.$axios ??
+        window.axios;
     if (!axios) {
         return;
     }
@@ -267,7 +273,7 @@ Statamic.booted(() => {
                 };
             });
 
-            Vue.nextTick(() => setTimeout(tryInjectStatusColors, 150));
+            setTimeout(tryInjectStatusColors, 150);
             return response;
         }
 
