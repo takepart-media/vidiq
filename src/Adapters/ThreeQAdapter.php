@@ -4,6 +4,8 @@ namespace TakepartMedia\Vidiq\Adapters;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Pool;
+use GuzzleHttp\Psr7\Request;
 use Illuminate\Support\Facades\Cache;
 use League\Flysystem\Config;
 use League\Flysystem\FileAttributes;
@@ -481,27 +483,46 @@ class ThreeQAdapter implements FilesystemAdapter
         }
 
         try {
+            $limit = 500;
+
+            // Cheap count-only request (no metadata) so every data page can be
+            // fetched in parallel, rather than fetching the first one serially.
+            // For a large catalogue this is the difference between a few seconds
+            // and tens of seconds (which would otherwise time out a CP request
+            // before the listing is cached).
+            $totalCount = (int) ($this->fetchFilesPage(1, 0, includeData: false)['TotalCount'] ?? 0);
+
             $files = [];
-            $offset = 0;
-            $limit = 100;
 
-            do {
-                $response = $this->client->get("v2/projects/{$this->projectId}/files", [
-                    'query' => [
-                        'IncludeMetadata' => 'true',
-                        'IncludeProperties' => 'true',
-                        'Limit' => $limit,
-                        'Offset' => $offset,
-                    ],
-                ]);
+            if ($totalCount > 0) {
+                $offsets = range(0, $totalCount - 1, $limit);
+                $failed = false;
 
-                $data = json_decode($response->getBody()->getContents(), true);
-                $batch = $data['Files'] ?? [];
-                $totalCount = $data['TotalCount'] ?? 0;
+                $requests = function () use ($offsets, $limit) {
+                    foreach ($offsets as $offset) {
+                        yield new Request(
+                            'GET',
+                            "v2/projects/{$this->projectId}/files?IncludeMetadata=true&IncludeProperties=true&Limit={$limit}&Offset={$offset}"
+                        );
+                    }
+                };
 
-                $files = array_merge($files, $batch);
-                $offset += $limit;
-            } while ($offset < $totalCount);
+                (new Pool($this->client, $requests(), [
+                    'concurrency' => max(1, (int) config('vidiq.cache.fetch_concurrency', 6)),
+                    'fulfilled' => function ($response) use (&$files) {
+                        $data = json_decode($response->getBody()->getContents(), true);
+                        $files = array_merge($files, $data['Files'] ?? []);
+                    },
+                    'rejected' => function () use (&$failed) {
+                        $failed = true;
+                    },
+                ]))->promise()->wait();
+
+                // Don't cache a partial listing as if it were complete.
+                if ($failed) {
+                    throw new \RuntimeException('one or more 3q listing pages failed to load');
+                }
+            }
 
             $listing = [];
             $usedPaths = [];
@@ -542,9 +563,28 @@ class ThreeQAdapter implements FilesystemAdapter
             $this->listingMemory = $listing;
 
             return $listing;
-        } catch (GuzzleException $e) {
+        } catch (GuzzleException|\RuntimeException $e) {
             throw UnableToRetrieveMetadata::create('/', 'listContents', $e->getMessage(), $e);
         }
+    }
+
+    /**
+     * Fetch a single page of the 3q file listing.
+     *
+     * @return array<string, mixed>
+     */
+    private function fetchFilesPage(int $limit, int $offset, bool $includeData = true): array
+    {
+        $query = ['Limit' => $limit, 'Offset' => $offset];
+
+        if ($includeData) {
+            $query['IncludeMetadata'] = 'true';
+            $query['IncludeProperties'] = 'true';
+        }
+
+        $response = $this->client->get("v2/projects/{$this->projectId}/files", ['query' => $query]);
+
+        return json_decode($response->getBody()->getContents(), true) ?? [];
     }
 
     /**

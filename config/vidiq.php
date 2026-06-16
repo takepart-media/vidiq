@@ -47,6 +47,13 @@ return [
         'refresh_after' => env('VIDIQ_CACHE_REFRESH_AFTER', 21600), // 6 hours
 
         'prefix' => 'vidiq',
+
+        /*
+         * Number of 3q listing pages fetched concurrently when (re)building the
+         * cache. The listing is paginated; fetching pages in parallel turns a
+         * large catalogue from tens of seconds (serial) into a few seconds.
+         */
+        'fetch_concurrency' => env('VIDIQ_FETCH_CONCURRENCY', 6),
     ],
 
     /*
