@@ -539,6 +539,9 @@ class ThreeQAdapter implements FilesystemAdapter
                 $size = $properties['Size'] ?? null;
                 $title = $metadata['Title'] ?? $metadata['DisplayTitle'] ?? $name;
                 $releaseStatus = $metadata['ReleaseStatus'] ?? null;
+                $duration = isset($properties['Length']) ? (int) round((float) $properties['Length']) : null;
+                $width = $properties['VideoWidth'] ?? null;
+                $height = $properties['VideoHeight'] ?? null;
 
                 $filePath = $this->makeUniquePath($title ?: $name, $fileId, $usedPaths);
                 $usedPaths[] = $filePath;
@@ -555,6 +558,9 @@ class ThreeQAdapter implements FilesystemAdapter
                     'size' => $size,
                     'timestamp' => $timestamp,
                     'release_status' => $releaseStatus,
+                    'duration' => $duration,
+                    'width' => $width,
+                    'height' => $height,
                 ];
             }
 
@@ -658,6 +664,19 @@ class ThreeQAdapter implements FilesystemAdapter
 
         if (isset($fileData['timestamp'])) {
             $lines[] = 'last_modified: '.$fileData['timestamp'];
+        }
+
+        // Statamic reads width/height/duration as top-level meta keys (Asset::width/height/duration).
+        if (! empty($fileData['width'])) {
+            $lines[] = 'width: '.(int) $fileData['width'];
+        }
+
+        if (! empty($fileData['height'])) {
+            $lines[] = 'height: '.(int) $fileData['height'];
+        }
+
+        if (! empty($fileData['duration'])) {
+            $lines[] = 'duration: '.(int) $fileData['duration'];
         }
 
         $lines[] = "mime_type: 'video/mp4'";
