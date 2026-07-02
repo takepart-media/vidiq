@@ -122,6 +122,71 @@ class ThreeQAdapter implements FilesystemAdapter
         return $embedCodes;
     }
 
+    /**
+     * Fetch and cache embed codes for every video in the listing, in parallel.
+     *
+     * Embed codes are stable per file, so already-cached codes are kept and
+     * only missing (or previously empty — the video may have finished encoding
+     * since) ones are fetched. Pass $fresh to refetch everything, e.g. after
+     * a playout configuration change on 3q.
+     *
+     * @param  bool  $fresh  Refetch embed codes that are already cached.
+     * @param  (callable(int, int): void)|null  $onProgress  Called with (done, total) after each completed request.
+     * @return array{fetched: int, kept: int, failed: int}
+     *
+     * @throws FilesystemException
+     */
+    public function warmEmbedCodes(bool $fresh = false, ?callable $onProgress = null): array
+    {
+        $fileIds = array_column($this->fetchListing(), 'id');
+
+        $pending = $fresh ? $fileIds : array_values(array_filter(
+            $fileIds,
+            fn (string $fileId) => empty($this->cache()->get($this->cacheKey("embed_codes.{$fileId}"))),
+        ));
+
+        $total = count($pending);
+        $done = 0;
+        $failed = 0;
+
+        $requests = function () use ($pending) {
+            foreach ($pending as $fileId) {
+                yield new Request(
+                    'GET',
+                    "v2/projects/{$this->projectId}/files/{$fileId}/playouts/default/embed"
+                );
+            }
+        };
+
+        (new Pool($this->client, $requests(), [
+            'concurrency' => max(1, (int) config('vidiq.cache.fetch_concurrency', 6)),
+            'fulfilled' => function ($response, int $index) use ($pending, $total, &$done, &$failed, $onProgress) {
+                $data = json_decode($response->getBody()->getContents(), true);
+                $embedCodes = $data['FileEmbedCodes'] ?? [];
+
+                if ($embedCodes === []) {
+                    $failed++;
+                }
+
+                $this->cacheStore($this->cacheKey("embed_codes.{$pending[$index]}"), $embedCodes);
+
+                if ($onProgress) {
+                    $onProgress(++$done, $total);
+                }
+            },
+            // Rejected requests are not cached, so they stay pending for the next run.
+            'rejected' => function ($reason, int $index) use ($total, &$done, &$failed, $onProgress) {
+                $failed++;
+
+                if ($onProgress) {
+                    $onProgress(++$done, $total);
+                }
+            },
+        ]))->promise()->wait();
+
+        return ['fetched' => $total, 'kept' => count($fileIds) - $total, 'failed' => $failed];
+    }
+
     // =========================================================================
     // Directory listing
     // =========================================================================
@@ -564,6 +629,8 @@ class ThreeQAdapter implements FilesystemAdapter
                 ];
             }
 
+            $this->pruneRemovedFiles($listing);
+
             $this->cacheStore($this->cacheKey('listing'), $listing);
             $this->cache()->forever($this->cacheKey('listing.refreshed_at'), time());
             $this->listingMemory = $listing;
@@ -571,6 +638,30 @@ class ThreeQAdapter implements FilesystemAdapter
             return $listing;
         } catch (GuzzleException|\RuntimeException $e) {
             throw UnableToRetrieveMetadata::create('/', 'listContents', $e->getMessage(), $e);
+        }
+    }
+
+    /**
+     * Forget per-file cache keys (embed codes, meta edits) for videos that are
+     * no longer present in the fresh listing, so they don't accumulate forever
+     * in a permanent cache store.
+     *
+     * @param  array<string, array<string, mixed>>  $fresh  The newly fetched listing, keyed by path.
+     */
+    private function pruneRemovedFiles(array $fresh): void
+    {
+        $previous = $this->cache()->get($this->cacheKey('listing')) ?? [];
+
+        // Embed codes are keyed by FileId (survives renames)...
+        $staleIds = array_diff(array_column($previous, 'id'), array_column($fresh, 'id'));
+
+        foreach ($staleIds as $staleId) {
+            $this->cache()->forget($this->cacheKey("embed_codes.{$staleId}"));
+        }
+
+        // ...while meta edits are keyed by path.
+        foreach (array_keys(array_diff_key($previous, $fresh)) as $stalePath) {
+            $this->cache()->forget($this->metaEditCacheKey(self::META_PREFIX.$stalePath.self::META_SUFFIX));
         }
     }
 
