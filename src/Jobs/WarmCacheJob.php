@@ -31,11 +31,11 @@ class WarmCacheJob implements ShouldQueue
 
         // Refresh in place (overwrite), without flushing first, so concurrent
         // requests keep serving the existing cache with no cold gap.
-        $listing = $adapter->fetchListing(force: true);
+        $adapter->fetchListing(force: true);
 
-        foreach (array_keys($listing) as $path) {
-            $adapter->getUrl($path, force: true);
-        }
+        // Embed codes are stable per file, so only missing ones (new videos)
+        // are fetched — refetching all of them every run is wasted work.
+        $adapter->warmEmbedCodes();
     }
 
     /**

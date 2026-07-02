@@ -17,7 +17,8 @@ class WarmCacheCommand extends Command
 {
     /** @var string */
     protected $signature = 'vidiq:warm-cache
-                            {--embed : Also pre-fetch embed codes for every video}';
+                            {--embed : Also pre-fetch embed codes for every video}
+                            {--fresh : Flush all caches first and refetch everything}';
 
     /** @var string */
     protected $description = 'Warm the 3q video listing cache (and optionally embed codes)';
@@ -35,9 +36,11 @@ class WarmCacheCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info('Flushing vidiq cache...');
-        $flushed = $adapter->flushCache();
-        $this->info("Flushed {$flushed} cache key(s).");
+        if ($this->option('fresh')) {
+            $this->info('Flushing vidiq cache...');
+            $flushed = $adapter->flushCache();
+            $this->info("Flushed {$flushed} cache key(s).");
+        }
 
         $this->info('Fetching video listing from 3q API...');
         $listing = $adapter->fetchListing(force: true);
@@ -46,26 +49,24 @@ class WarmCacheCommand extends Command
 
         if ($this->option('embed') && $count > 0) {
             $this->info('Pre-fetching embed codes...');
-            $bar = $this->output->createProgressBar($count);
-            $bar->start();
 
-            $errors = 0;
-            foreach (array_keys($listing) as $path) {
-                $result = $adapter->getUrl($path);
-                if ($result === []) {
-                    $errors++;
-                }
-                $bar->advance();
-            }
+            $bar = null;
+            $stats = $adapter->warmEmbedCodes(
+                fresh: (bool) $this->option('fresh'),
+                onProgress: function (int $done, int $total) use (&$bar) {
+                    $bar ??= tap($this->output->createProgressBar($total))->start();
+                    $bar->setProgress($done);
+                },
+            );
 
-            $bar->finish();
+            $bar?->finish();
             $this->newLine();
 
-            if ($errors > 0) {
-                $this->warn("{$errors} video(s) returned empty embed codes.");
+            if ($stats['failed'] > 0) {
+                $this->warn("{$stats['failed']} video(s) returned empty embed codes.");
             }
 
-            $this->info('Embed codes cached.');
+            $this->info("Embed codes cached ({$stats['fetched']} fetched, {$stats['kept']} already cached).");
         }
 
         $this->info('Done.');
