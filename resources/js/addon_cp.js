@@ -1,338 +1,43 @@
-/** vidiq CP addon – status strips on thumbnails + 3Q player iframe in asset editor. */
+/**
+ * Renders the 3Q player inside the Statamic asset editor.
+ *
+ * Statamic 6 exposes no slot, hook or store for the editor's preview column, so
+ * the fieldtype component teleports itself in there and the stylesheet hides the
+ * core <video> element (which has no usable src on a private container).
+ *
+ * ponytail: the teleport target is the first `.editor-preview` in the document —
+ * wrong one if an asset editor is ever opened from inside another asset editor.
+ * Upgrade path: target a per-editor selector once Statamic exposes one.
+ */
+Statamic.component("vidiq_player-fieldtype", {
+    props: ["meta"],
 
-const STATUS_COLORS = {
-    published: "#16a34a",
-    unpublished: "#ca8a04",
-    draft: "#94a3b8",
+    computed: {
+        /** @returns {string|null} The 3Q player URL resolved by the fieldtype's preload(). */
+        playerUrl() {
+            return this.meta?.player_url ?? null;
+        },
+
+        /** @returns {boolean} True when used outside the asset editor, so we render inline instead. */
+        teleportDisabled() {
+            return !document.querySelector(".asset-editor .editor-preview");
+        },
+    },
+
+    template: `
+        <teleport to=".asset-editor .editor-preview" :disabled="teleportDisabled">
+            <div class="vidiq-player" v-if="playerUrl">
+                <iframe :src="playerUrl" allowfullscreen></iframe>
+            </div>
+        </teleport>
+    `,
+});
+
+/** Renders a 3Q release status as a coloured badge. Payload comes from VidiqStatus. */
+const statusBadge = {
+    props: ["value"],
+    template: `<ui-badge v-if="value" :color="value.color" :text="value.label" pill />`,
 };
 
-let assetDataFetch = null;
-
-/** Set of container handles whose disk driver is 3q. Populated from /cp/vidiq/assets. */
-let vidiqContainers = new Set();
-
-/** path → { thumbnailUrl, status } */
-const statusMap = {};
-
-/** Player URL set by interceptor when an editor modal opens for a vidiq video. */
-let pendingPlayerUrl = null;
-
-/** Fieldtype instances that have already been fixed (prevents re-triggering loadAssets). */
-const fixedFieldtypes = new WeakSet();
-
-/** Whether the initial fieldtype fix pass has completed. */
-let initialFixDone = false;
-
-/**
- * Fetch thumbnail/status data from the vidiq assets endpoint.
- * Uses a singleton promise so only one HTTP request is made per page load.
- *
- * @param {object} axios - The Axios instance to use for the request.
- * @returns {Promise<object>} The asset data keyed by container handle.
- */
-function loadAssetData(axios) {
-    if (assetDataFetch) {
-        return assetDataFetch;
-    }
-
-    assetDataFetch = axios
-        .get("/cp/vidiq/assets")
-        .then((r) => {
-            const data = r.data ?? {};
-            vidiqContainers = new Set(Object.keys(data));
-            return data;
-        })
-        .catch(() => {
-            assetDataFetch = null;
-            return {};
-        });
-
-    return assetDataFetch;
-}
-
-/**
- * Overlay a coloured left strip on the thumbnail's direct parent.
- *
- * @param {HTMLImageElement} imgEl - The thumbnail image element.
- * @param {string} status - The release status (published, unpublished, draft).
- */
-function injectStatusColor(imgEl, status) {
-    const container = imgEl.parentElement;
-    if (!container || container.querySelector(".vidiq-status-indicator")) {
-        return;
-    }
-
-    const strip = document.createElement("div");
-    strip.className = "vidiq-status-indicator";
-    strip.style.cssText = [
-        "position:absolute",
-        "top:0",
-        "left:-3px",
-        "bottom:0",
-        "width:6px",
-        `background:${STATUS_COLORS[status] ?? STATUS_COLORS.draft}`,
-        "pointer-events:none",
-        "z-index:1",
-        "border-radius:2px 0 0 2px",
-    ].join(";");
-
-    container.style.position = "relative";
-    container.appendChild(strip);
-}
-
-/**
- * Replace <video> in the asset editor with a 3Q player iframe using pendingPlayerUrl.
- */
-function tryInjectVideoPlayers() {
-    if (!pendingPlayerUrl) {
-        return;
-    }
-
-    const video = document.querySelector(
-        ".asset-editor.is-file .image-wrapper video[controls]",
-    );
-    if (!video || video.parentElement?.querySelector("iframe.vidiq-player")) {
-        return;
-    }
-
-    const iframe = document.createElement("iframe");
-    iframe.className = "vidiq-player";
-    iframe.src = pendingPlayerUrl;
-    iframe.style.cssText = "width:100%;height:100%;border:0;display:block";
-    iframe.allow = "autoplay; fullscreen";
-    video.replaceWith(iframe);
-    pendingPlayerUrl = null;
-}
-
-/**
- * Match img.asset-thumbnail src against statusMap and inject strips.
- */
-function tryInjectStatusColors() {
-    if (!Object.keys(statusMap).length) {
-        return;
-    }
-
-    document.querySelectorAll("img.asset-thumbnail").forEach((img) => {
-        const src = img.getAttribute("src");
-        if (!src) {
-            return;
-        }
-
-        for (const { thumbnailUrl, status } of Object.values(statusMap)) {
-            if (src === thumbnailUrl) {
-                injectStatusColor(img, status ?? "draft");
-                break;
-            }
-        }
-    });
-}
-
-/**
- * On initial entry-form load, re-trigger loadAssets() for vidiq AssetRow
- * instances missing thumbnails. Each fieldtype is only fixed once.
- */
-function fixFieldtypeInitialLoad() {
-    if (initialFixDone) {
-        return;
-    }
-
-    let hasVidiqTrs = false;
-    const fieldtypesToFix = new Set();
-
-    document.querySelectorAll("tr").forEach((tr) => {
-        const vm = tr.__vue__;
-        if (!vm?.asset?.id) {
-            return;
-        }
-
-        const colonPos = vm.asset.id.indexOf("::");
-        if (colonPos < 0) {
-            return;
-        }
-
-        const container = vm.asset.id.substring(0, colonPos);
-        if (!vidiqContainers.has(container)) {
-            return;
-        }
-
-        hasVidiqTrs = true;
-
-        if (vm.asset.isImage) {
-            return;
-        }
-
-        let parent = vm.$parent;
-        while (parent && !parent.loadAssets) {
-            parent = parent.$parent;
-        }
-        if (parent?.value?.length && !fixedFieldtypes.has(parent)) {
-            fieldtypesToFix.add(parent);
-        }
-    });
-
-    if (fieldtypesToFix.size === 0) {
-        // Only mark done once we've actually seen vidiq asset rows.
-        // Before that, the entry form may not have rendered yet.
-        if (hasVidiqTrs) {
-            initialFixDone = true;
-        }
-        return;
-    }
-
-    fieldtypesToFix.forEach((ft) => {
-        fixedFieldtypes.add(ft);
-        ft.loadAssets(ft.value);
-    });
-}
-
-let fixTimer = null;
-
-const domObserver = new MutationObserver(() => {
-    tryInjectStatusColors();
-    tryInjectVideoPlayers();
-
-    if (!initialFixDone) {
-        clearTimeout(fixTimer);
-        fixTimer = setTimeout(fixFieldtypeInitialLoad, 300);
-    }
-});
-
-Statamic.booted(() => {
-    // Statamic 6 (Vue 3): the CP axios lives on the Vue app's globalProperties
-    // (what `this.$axios` resolves to in components). Vue.prototype is gone.
-    // Fall back to older locations for Statamic 5 compatibility.
-    const axios =
-        Statamic.$app?.config?.globalProperties?.$axios ??
-        Statamic.$axios ??
-        window.axios;
-    if (!axios) {
-        return;
-    }
-
-    // Eagerly load asset data so vidiqContainers is populated
-    // before fixFieldtypeInitialLoad() runs.
-    loadAssetData(axios);
-
-    domObserver.observe(document.body, { childList: true, subtree: true });
-
-    axios.interceptors.response.use(async (response) => {
-        const url = response.config?.url ?? "";
-
-        if (
-            url.includes("/vidiq/assets") ||
-            url.includes("/vidiq/player-url")
-        ) {
-            return response;
-        }
-
-        // Only fetch asset data for URLs that actually need vidiq enrichment.
-        const isFolderBrowse = url.match(
-            /\/assets\/browse\/folders\/([^/?]+)/,
-        );
-        const isAssetEditor =
-            url.match(/\/assets\/[^/]+$/) && response.data?.data?.id;
-        const isFieldtype = url.includes("/assets-fieldtype");
-
-        if (!isFolderBrowse && !isAssetEditor && !isFieldtype) {
-            return response;
-        }
-
-        const assetData = await loadAssetData(axios);
-
-        // Asset browser folder listing
-        if (isFolderBrowse) {
-            const container = isFolderBrowse[1];
-            if (!vidiqContainers.has(container)) {
-                return response;
-            }
-
-            const assets = response.data?.data?.assets;
-            if (!assets?.length) {
-                return response;
-            }
-
-            response.data.data.assets = assets.map((asset) => {
-                const data = assetData[container]?.[asset.path];
-                if (!data) {
-                    return asset;
-                }
-
-                statusMap[asset.path] = {
-                    thumbnailUrl: data.thumbnail_url,
-                    status: data.release_status,
-                };
-
-                if (!data.thumbnail_url) {
-                    return asset;
-                }
-
-                return {
-                    ...asset,
-                    is_image: true,
-                    thumbnail: data.thumbnail_url,
-                };
-            });
-
-            setTimeout(tryInjectStatusColors, 150);
-            return response;
-        }
-
-        // Asset editor modal (/cp/assets/{base64-id}): fetch + store player URL
-        if (isAssetEditor) {
-            const asset = response.data.data;
-            const colonPos = asset.id?.indexOf("::") ?? -1;
-            const container =
-                colonPos >= 0 ? asset.id.substring(0, colonPos) : null;
-
-            if (container && vidiqContainers.has(container) && asset.isVideo) {
-                try {
-                    const r = await axios.get("/cp/vidiq/player-url", {
-                        params: { path: asset.path, container },
-                    });
-                    pendingPlayerUrl = r.data?.player_url ?? null;
-                } catch {
-                    // ignore – video stays as-is
-                }
-            }
-
-            return response;
-        }
-
-        // Assets fieldtype row display
-        if (isFieldtype) {
-            const assets = Array.isArray(response.data) ? response.data : null;
-            if (!assets?.length) {
-                return response;
-            }
-
-            response.data = assets.map((asset) => {
-                const colonPos = asset.id?.indexOf("::") ?? -1;
-                const container =
-                    colonPos >= 0 ? asset.id.substring(0, colonPos) : null;
-                if (!container || !vidiqContainers.has(container)) {
-                    return asset;
-                }
-
-                const data = assetData[container]?.[asset.path];
-                if (!data?.thumbnail_url) {
-                    return asset;
-                }
-
-                statusMap[asset.path] = {
-                    thumbnailUrl: data.thumbnail_url,
-                    status: data.release_status,
-                };
-
-                return {
-                    ...asset,
-                    isImage: true,
-                    thumbnail: data.thumbnail_url,
-                };
-            });
-
-            return response;
-        }
-
-        return response;
-    });
-});
+Statamic.component("vidiq_status-fieldtype", statusBadge);
+Statamic.component("vidiq_status-fieldtype-index", statusBadge);

@@ -9,10 +9,16 @@ use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use League\Flysystem\Filesystem;
+use Statamic\Contracts\Assets\Asset;
 use Statamic\Facades\Utility;
+use Statamic\Http\Resources\CP\Assets\Asset as AssetResource;
+use Statamic\Http\Resources\CP\Assets\AssetsFieldtypeAsset;
+use Statamic\Http\Resources\CP\Assets\FolderAsset;
 use Statamic\Providers\AddonServiceProvider;
 use TakepartMedia\Vidiq\Adapters\ThreeQAdapter;
 use TakepartMedia\Vidiq\Console\Commands\WarmCacheCommand;
+use TakepartMedia\Vidiq\Fieldtypes\VidiqPlayer;
+use TakepartMedia\Vidiq\Fieldtypes\VidiqStatus;
 use TakepartMedia\Vidiq\Http\Controllers\VidiQCacheController;
 
 class ServiceProvider extends AddonServiceProvider
@@ -20,17 +26,18 @@ class ServiceProvider extends AddonServiceProvider
     /** Guards against registering the nightly schedule more than once per process. */
     protected static bool $scheduleRegistered = false;
 
-    protected $routes = [
-        'cp' => __DIR__.'/../routes/cp.php',
-    ];
-
     protected $vite = [
-        'input' => ['resources/js/addon_cp.js'],
+        'input' => ['resources/js/addon_cp.js', 'resources/css/addon_cp.css'],
         'publicDirectory' => 'resources/dist',
     ];
 
     protected $commands = [
         WarmCacheCommand::class,
+    ];
+
+    protected $fieldtypes = [
+        VidiqPlayer::class,
+        VidiqStatus::class,
     ];
 
     /**
@@ -76,6 +83,7 @@ class ServiceProvider extends AddonServiceProvider
     {
         $this->bootDiskDriver();
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'vidiq');
+        $this->bootAssetThumbnails();
         $this->bootCacheUtility();
         $this->scheduleRefresh();
     }
@@ -104,6 +112,31 @@ class ServiceProvider extends AddonServiceProvider
     }
 
     /**
+     * Serve the 3Q poster as the CP thumbnail for vidiq assets.
+     *
+     * Statamic's own pipeline would send video assets through Glide/ffmpeg, which
+     * cannot reach a remote 3Q file. The poster URL already sits on the asset as
+     * meta data, so the hook just passes it through — for the browser grid and
+     * table (FolderAsset), the editor (Asset) and the assets fieldtype.
+     */
+    protected function bootAssetThumbnails(): void
+    {
+        foreach ([FolderAsset::class, AssetResource::class, AssetsFieldtypeAsset::class] as $resource) {
+            $resource::hook('asset', function ($payload, $next) {
+                /** @var Asset $asset */
+                $asset = $this->resource; // Hookable binds $this to the resource.
+
+                if (Vidiq::isVidiqAsset($asset) && ($poster = $asset->get('thumbnail_url'))) {
+                    $payload->data['thumbnail'] = $poster;
+                    $payload->data['preview'] = $poster;
+                }
+
+                return $next($payload);
+            });
+        }
+    }
+
+    /**
      * Register the vidiq cache utility in the Statamic CP.
      */
     protected function bootCacheUtility(): void
@@ -113,7 +146,7 @@ class ServiceProvider extends AddonServiceProvider
                 ->title('vidiq Cache')
                 ->navTitle('vidiq Cache')
                 ->description(__('Manage the vidiq video listing and embed-code cache.'))
-                ->icon('video')
+                ->icon('movie-video-clip')
                 ->view('vidiq::utilities.cache', function () {
                     $adapter = $this->resolveAdapter();
                     $store = Cache::store(config('vidiq.cache.store') ?: null);

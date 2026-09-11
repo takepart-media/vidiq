@@ -1,52 +1,32 @@
 @php use function Statamic\trans as __; @endphp
 
-@extends('statamic::layout')
-@section('title', __('vidiQ Cache'))
+{{-- Statamic 6 renders utility views as a fragment: the HTML is compiled client-side
+     as a Vue template, so globally registered `ui-*` components are available here. --}}
+<div class="max-w-5xl 3xl:max-w-6xl mx-auto" data-max-width-wrapper>
+    <ui-header title="{{ __('vidiQ Cache') }}" icon="movie-video-clip"></ui-header>
 
-@section('content')
-
-    <header class="mb-6">
-        @include('statamic::partials.breadcrumb', [
-            'url' => cp_route('utilities.index'),
-            'title' => __('Utilities')
-        ])
-        <h1>{{ __('vidiQ Cache') }}</h1>
-    </header>
-
-    <div class="card p-0">
-        <div class="p-4">
-            <div class="flex justify-between items-center">
-                <div class="rtl:pl-8 ltr:pr-8">
-                    <h2 class="font-bold">{{ __('Video Cache') }}</h2>
-                    <p class="text-gray dark:text-dark-150 text-sm my-2">
-                        {{ __('Cached video listings and embed codes from the 3Q.video API.') }}
-                    </p>
-                </div>
-                <div class="flex">
-                    <form method="POST" action="{{ cp_route('utilities.vidiq-cache.warm') }}" class="rtl:ml-2 ltr:mr-2">
-                        @csrf
-                        <button class="btn">{{ __('Warm') }}</button>
-                    </form>
-                    <form method="POST" action="{{ cp_route('utilities.vidiq-cache.clear') }}">
-                        @csrf
-                        <button class="btn">{{ __('Clear') }}</button>
-                    </form>
+    <ui-card-panel heading="{{ __('Video Cache') }}">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <ui-description text="{{ __('Cached video listings and embed codes from the 3Q.video API.') }}"></ui-description>
+                <div class="flex flex-wrap gap-2 mt-3">
+                    <ui-badge prepend="{{ __('Videos') }}" text="{{ $videoCount }}"></ui-badge>
+                    <ui-badge prepend="{{ __('Cache mode') }}" text="{{ $cacheMode }}"></ui-badge>
+                    @if ($cacheTtl)
+                        <ui-badge prepend="{{ __('TTL') }}" text="{{ $cacheTtl }}"></ui-badge>
+                    @endif
                 </div>
             </div>
-            <div class="text-sm text-gray dark:text-dark-150 flex flex-wrap">
-                <div class="rtl:ml-4 ltr:mr-4 badge-pill-sm">
-                    <span class="text-gray-800 dark:text-dark-150 font-medium">{{ __('Videos') }}:</span> {{ $videoCount }}
-                </div>
-                <div class="rtl:ml-4 ltr:mr-4 badge-pill-sm">
-                    <span class="text-gray-800 dark:text-dark-150 font-medium">{{ __('Cache mode') }}:</span> {{ $cacheMode }}
-                </div>
-                @if ($cacheTtl)
-                    <div class="rtl:ml-4 ltr:mr-4 badge-pill-sm">
-                        <span class="text-gray-800 dark:text-dark-150 font-medium">{{ __('TTL') }}:</span> {{ $cacheTtl }}
-                    </div>
-                @endif
+            <div class="flex gap-2">
+                <form method="POST" action="{{ cp_route('utilities.vidiq-cache.warm') }}">
+                    @csrf
+                    <ui-button type="submit" text="{{ __('Warm') }}"></ui-button>
+                </form>
+                <form method="POST" action="{{ cp_route('utilities.vidiq-cache.clear') }}">
+                    @csrf
+                    <ui-button type="submit" variant="danger" text="{{ __('Clear') }}"></ui-button>
+                </form>
             </div>
         </div>
-    </div>
-
-@stop
+    </ui-card-panel>
+</div>

@@ -1,6 +1,11 @@
 {
+  "resources/css/addon_cp.css": {
+    "file": "assets/addon_cp-Ck7-TBZN.css",
+    "src": "resources/css/addon_cp.css",
+    "isEntry": true
+  },
   "resources/js/addon_cp.js": {
-    "file": "assets/addon_cp-CxnV5osc.js",
+    "file": "assets/addon_cp-GeNa3FuV.js",
     "name": "addon_cp",
     "src": "resources/js/addon_cp.js",
     "isEntry": true

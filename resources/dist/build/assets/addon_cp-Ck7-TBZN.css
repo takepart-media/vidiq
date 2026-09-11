@@ -1,0 +1,1 @@
+.editor-preview:has(>.vidiq-player)>div:has(>video){display:none}.vidiq-player{display:flex;flex:1 1 auto;min-height:0;padding:2rem}.vidiq-player iframe{flex:1;border:0;aspect-ratio:16 / 9}
