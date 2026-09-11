@@ -3,13 +3,13 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/takepart-media/vidiq.svg?style=flat-square)](https://packagist.org/packages/takepart-media/vidiq)
 [![License](https://img.shields.io/packagist/l/takepart-media/vidiq.svg?style=flat-square)](https://packagist.org/packages/takepart-media/vidiq)
 [![PHP Version](https://img.shields.io/packagist/php-v/takepart-media/vidiq.svg?style=flat-square)](https://packagist.org/packages/takepart-media/vidiq)
-[![Statamic](https://img.shields.io/badge/Statamic-5.x-FF269E?style=flat-square)](https://statamic.com)
+[![Statamic](https://img.shields.io/badge/Statamic-6.x-FF269E?style=flat-square)](https://statamic.com)
 
 A Statamic addon that integrates the [3q.video](https://3q.video) hosting platform into the Statamic Control Panel asset
 browser. Videos hosted on 3q appear as browsable, deletable assets with thumbnail previews. A Blade component is
 provided for embedding videos in frontend templates.
 
-This addon has only been tested with **Statamic 5** and **3Q's SDN API v2**.
+This addon has only been tested with **Statamic 6** and **3Q's SDN API v2**.
 
 ## Features
 
@@ -29,9 +29,21 @@ This addon has only been tested with **Statamic 5** and **3Q's SDN API v2**.
 ## Requirements
 
 - PHP 8.3+
-- Statamic 5.x
+- Statamic 6.x
 - GuzzleHTTP 7.x
 - A [3q.video](https://3q.video) account with API access
+
+### Version compatibility
+
+| Addon version | Statamic |
+|---------------|----------|
+| 3.x           | 6.x      |
+| 2.x           | 5.x      |
+
+> **Statamic 5 support was dropped in 3.0.0.** Statamic 6 rebuilt the Control Panel on Inertia/Vue and removed the
+> Blade chrome the CP Cache Utility relied on (`statamic::partials.breadcrumb`, the `card`/`btn`/`badge-pill-sm`
+> classes). The utility view is now a fragment built from Statamic 6's global `ui-*` components, which do not exist
+> in Statamic 5. Projects still on Statamic 5 should stay on `^2.0`.
 
 ## Installation
 

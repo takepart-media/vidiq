@@ -40,7 +40,7 @@
     },
     "require": {
         "php": "^8.3",
-        "statamic/cms": "^5.0 || ^6.0",
+        "statamic/cms": "^6.0",
         "guzzlehttp/guzzle": "^7.0"
     },
     "require-dev": {
