@@ -6,6 +6,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Pool;
 use GuzzleHttp\Psr7\Request;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Facades\Cache;
 use League\Flysystem\Config;
 use League\Flysystem\FileAttributes;
@@ -25,11 +26,12 @@ use TakepartMedia\Vidiq\Jobs\WarmCacheJob;
 /**
  * Flysystem v3 adapter for the 3q. Video API.
  *
- * Path convention: "{sanitized-name}.jpg"
- *   - Using .jpg extension makes Statamic treat assets as images, enabling
- *     thumbnail display in the asset browser.
- *   - readStream() for .jpg paths downloads the actual thumbnail from 3q,
- *     which Statamic/Glide caches for subsequent requests.
+ * Path convention: the sanitized 3q display title (e.g. "My Interview.mp4"),
+ * disambiguated with the last 6 characters of the FileId on collisions.
+ *   - readStream() downloads the poster image from 3q, so Glide can serve it
+ *     if anything ever asks for a generated thumbnail.
+ *   - The CP thumbnail itself is the plain 3q poster URL, injected server-side
+ *     by ServiceProvider::bootAssetThumbnails().
  *   - Virtual .meta/ files are yielded from listContents() so Statamic reads
  *     video metadata (title, thumbnail_url) without writing to disk.
  *   - The FileId→path mapping is cached in Laravel cache keyed by project ID.
@@ -83,7 +85,7 @@ class ThreeQAdapter implements FilesystemAdapter
     /**
      * Return the embed codes for the given asset path.
      *
-     * @param  string  $path  The sanitized asset path (e.g. "my-video.jpg"), not the FileId.
+     * @param  string  $path  The sanitized asset path (e.g. "My Interview.mp4"), not the FileId.
      *
      * @throws FilesystemException
      */
@@ -263,7 +265,7 @@ class ThreeQAdapter implements FilesystemAdapter
     /**
      * Read the content of a .meta/ file; direct reads of asset paths are unsupported.
      *
-     * @param  string  $path  The .meta/ path to read (format: ".meta/{name}.jpg.yaml").
+     * @param  string  $path  The .meta/ path to read (format: ".meta/{name}.mp4.yaml").
      *
      * @throws UnableToReadFile
      * @throws FilesystemException
@@ -320,7 +322,7 @@ class ThreeQAdapter implements FilesystemAdapter
     /**
      * Accept .meta/ writes by persisting the content to the cache; throws for all other paths.
      *
-     * @param  string  $path  The .meta/ path to write (format: ".meta/{name}.jpg.yaml").
+     * @param  string  $path  The .meta/ path to write (format: ".meta/{name}.mp4.yaml").
      * @param  string  $contents  The YAML content to persist.
      * @param  Config  $config  Additional Flysystem configuration (unused).
      *
@@ -525,7 +527,7 @@ class ThreeQAdapter implements FilesystemAdapter
     /**
      * Fetch the full file listing from the API (or return from cache).
      *
-     * Returns an array keyed by the sanitized asset path ("{name}.jpg").
+     * Returns an array keyed by the sanitized asset path (the 3q display title).
      *
      * @param  bool  $force  When true, bypass the cache and always fetch from the API.
      * @return array<string, array{id: string, name: string, title: string, thumbnail_url: string|null, size: int|null, timestamp: int|null}>
@@ -704,7 +706,7 @@ class ThreeQAdapter implements FilesystemAdapter
             }
         }
 
-        return $this->listingMemory[$path] ?? $this->listingMemory[$path.'.jpg'] ?? [];
+        return $this->listingMemory[$path] ?? [];
     }
 
     /**
@@ -794,7 +796,7 @@ class ThreeQAdapter implements FilesystemAdapter
     /**
      * Return the YAML for a .meta/ path, preferring any user-edited version.
      *
-     * @param  string  $metaPath  The .meta/ path (format: ".meta/{name}.jpg.yaml").
+     * @param  string  $metaPath  The .meta/ path (format: ".meta/{name}.mp4.yaml").
      *
      * @throws FilesystemException
      */
@@ -827,7 +829,7 @@ class ThreeQAdapter implements FilesystemAdapter
     }
 
     /**
-     * Convert ".meta/{name}.jpg.yaml" → "{name}.jpg".
+     * Convert ".meta/{name}.yaml" → "{name}".
      *
      * @param  string  $metaPath  The .meta/ path to convert.
      */
@@ -878,7 +880,7 @@ class ThreeQAdapter implements FilesystemAdapter
      * The cache repository vidiq uses — an isolated store (see config) so a
      * global `cache:clear` doesn't wipe the listing and force a blocking refetch.
      */
-    private function cache(): \Illuminate\Contracts\Cache\Repository
+    private function cache(): Repository
     {
         return Cache::store(config('vidiq.cache.store') ?: null);
     }

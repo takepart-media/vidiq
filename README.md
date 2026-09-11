@@ -124,19 +124,78 @@ data:
 Statamic reads this file automatically; because the file exists virtually, Statamic skips calling `writeMeta()` and
 leaves the adapter's read-only behaviour intact.
 
-### CP JavaScript (thumbnail injection, status strips & player)
+### CP thumbnails (server-side)
 
-Statamic's asset browser only renders thumbnail images for assets where `is_image: true`. The addon registers an Axios
-response interceptor (via `Statamic.booted()`) that enriches several CP views:
+Statamic 6 renders a thumbnail for any asset whose CP payload carries a `thumbnail` key. 3Q videos have no local
+file Glide could work on, so the addon hooks the three CP asset resources and passes the 3Q poster URL through:
 
-1. **Asset browser** — intercepts folder listing responses for any 3Q-backed container, fetches the thumbnail & status
-   map from `GET /cp/vidiq/assets` (once per page load), and injects `is_image: true` + `thumbnail: <url>` into each
-   asset object. A coloured left-edge strip is added to each thumbnail to indicate the release status
-   (green = published, yellow = unpublished, grey = draft).
-2. **Asset editor** — when a 3Q video is opened in the editor modal, the default `<video>` element is replaced with a
-   3Q player iframe fetched from `GET /cp/vidiq/player-url`.
-3. **Assets fieldtype** — when an entry form contains an Assets field referencing a 3Q container, the interceptor
-   injects thumbnails and status indicators into the fieldtype row display.
+```php
+// ServiceProvider::bootAssetThumbnails()
+FolderAsset::hook('asset', fn ($payload, $next) => …);   // browser grid + table
+Asset::hook('asset', …);                                  // editor modal
+AssetsFieldtypeAsset::hook('asset', …);                   // assets fieldtype
+```
+
+The poster URL comes from the asset's own meta data (`thumbnail_url`, written by the adapter's virtual `.meta/`
+file), so no extra request and no client-side patching is involved.
+
+### CP player (`vidiq_player` fieldtype)
+
+The asset editor renders `<video :src="asset.url">` for video assets, and a read-only 3Q container has no asset
+URL. The addon ships a `vidiq_player` fieldtype instead: it resolves the 3Q player URL server-side in `preload()`
+and its Vue component teleports an iframe into the editor's preview column, hiding the core `<video>`.
+
+Add it to the container's asset blueprint to activate it — see below. Outside the asset editor the field renders
+inline.
+
+### Asset blueprint
+
+Create `resources/blueprints/assets/{container}.yaml` in your Statamic project:
+
+```yaml
+title: Video
+fields:
+  -
+    handle: vidiq_player
+    field:
+      type: vidiq_player
+      display: Player
+      hide_display: true
+      listable: false
+  -
+    handle: alt
+    field:
+      type: text
+      display: 'Alt Text'
+  -
+    handle: release_status
+    field:
+      type: vidiq_status
+      display: Status
+      listable: true
+```
+
+Blueprint fields are listed *before* Statamic's own asset columns (`File`, `Size`, `Last Modified`, …), so to
+move the status column to the end, set the container's column preference — either by reordering the columns in
+the CP and saving them as default, or in `resources/preferences.yaml`:
+
+```yaml
+assets:
+  {container}:
+    columns:
+      - basename
+      - alt
+      - size
+      - last_modified
+      - release_status
+```
+
+Columns missing from that list are hidden.
+
+`release_status` is filled from the 3Q metadata (`published` / `unpublished` / `draft`). The `vidiq_status`
+fieldtype renders it as a coloured, translated badge — green for published, amber for unpublished, grey for
+draft — both as a table column in the asset browser and in the asset editor. Labels come from the addon's
+translations (`lang/{locale}/messages.php`).
 
 ## Blade Component
 
