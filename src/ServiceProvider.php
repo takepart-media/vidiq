@@ -113,7 +113,7 @@ class ServiceProvider extends AddonServiceProvider
                 ->title('vidiq Cache')
                 ->navTitle('vidiq Cache')
                 ->description(__('Manage the vidiq video listing and embed-code cache.'))
-                ->icon('video')
+                ->icon('movie-video-clip')
                 ->view('vidiq::utilities.cache', function () {
                     $adapter = $this->resolveAdapter();
                     $store = Cache::store(config('vidiq.cache.store') ?: null);
