@@ -35,7 +35,8 @@ use TakepartMedia\Vidiq\Jobs\WarmCacheJob;
  *   - The CP thumbnail itself is the plain 3q poster URL, injected server-side
  *     by ServiceProvider::bootAssetThumbnails().
  *   - Virtual .meta/ files are yielded from listContents() so Statamic reads
- *     video metadata (title, thumbnail_url) without writing to disk.
+ *     video metadata (title, thumbnail_url) without writing to disk. Edits are
+ *     kept as a diff against the 3q values and merged back in on read.
  *   - The FileId→path mapping is cached in Laravel cache keyed by project ID.
  */
 class ThreeQAdapter implements FilesystemAdapter
@@ -322,7 +323,7 @@ class ThreeQAdapter implements FilesystemAdapter
     // =========================================================================
 
     /**
-     * Accept .meta/ writes by persisting the content to the cache; throws for all other paths.
+     * Accept .meta/ writes by persisting the edited data fields; throws for all other paths.
      *
      * @param  string  $path  The .meta/ path to write (format: ".meta/{name}.mp4.yaml").
      * @param  string  $contents  The YAML content to persist.
@@ -333,8 +334,7 @@ class ThreeQAdapter implements FilesystemAdapter
     public function write(string $path, string $contents, Config $config): void
     {
         if ($this->isMetaPath($path)) {
-            // Persist edited meta so subsequent reads return the updated data.
-            $this->cache()->put($this->metaEditCacheKey($path), $contents, self::CACHE_TTL * 24 * 7);
+            $this->storeMetaOverrides($path, $contents);
 
             return;
         }
@@ -343,7 +343,7 @@ class ThreeQAdapter implements FilesystemAdapter
     }
 
     /**
-     * Accept .meta/ stream writes by persisting the content to the cache; throws for all other paths.
+     * Accept .meta/ stream writes by persisting the edited data fields; throws for all other paths.
      *
      * @param  string  $path  The .meta/ path to write.
      * @param  resource|string  $contents  The stream or string content to persist.
@@ -354,8 +354,7 @@ class ThreeQAdapter implements FilesystemAdapter
     public function writeStream(string $path, $contents, Config $config): void
     {
         if ($this->isMetaPath($path)) {
-            $content = is_resource($contents) ? stream_get_contents($contents) : $contents;
-            $this->cache()->put($this->metaEditCacheKey($path), $content, self::CACHE_TTL * 24 * 7);
+            $this->storeMetaOverrides($path, is_resource($contents) ? stream_get_contents($contents) : $contents);
 
             return;
         }
@@ -666,7 +665,7 @@ class ThreeQAdapter implements FilesystemAdapter
 
         // ...while meta edits are keyed by path.
         foreach (array_keys(array_diff_key($previous, $fresh)) as $stalePath) {
-            $this->cache()->forget($this->metaEditCacheKey(self::META_PREFIX.$stalePath.self::META_SUFFIX));
+            $this->cache()->forget($this->metaOverridesCacheKey(self::META_PREFIX.$stalePath.self::META_SUFFIX));
         }
     }
 
@@ -749,8 +748,9 @@ class ThreeQAdapter implements FilesystemAdapter
      * Statamic reads this to get size, last_modified, mime_type, and user data fields.
      *
      * @param  array<string, mixed>  $fileData  The file data entry from the listing cache.
+     * @param  array<string, mixed>  $overrides  Edited data fields that win over the 3q values.
      */
-    private function buildMetaYaml(array $fileData): string
+    private function buildMetaYaml(array $fileData, array $overrides = []): string
     {
         // Statamic reads size/last_modified/width/height/duration as top-level meta
         // keys (Asset::size(), ::width(), ...); everything else belongs under data.
@@ -764,15 +764,75 @@ class ThreeQAdapter implements FilesystemAdapter
 
         $meta['mime_type'] = 'video/mp4';
 
-        $meta['data'] = array_filter([
+        // Overrides are merged, not substituted, so an edited alt text survives
+        // while everything else keeps following the 3q listing.
+        $meta['data'] = array_merge($this->buildMetaData($fileData), $overrides);
+
+        return YAML::dump($meta);
+    }
+
+    /**
+     * Build the data fields a .meta/ file exposes from a 3q listing entry.
+     *
+     * @param  array<string, mixed>  $fileData  The file data entry from the listing cache.
+     * @return array<string, mixed>
+     */
+    private function buildMetaData(array $fileData): array
+    {
+        return array_filter([
             'alt' => $fileData['title'] ?: ($fileData['name'] ?? ''),
             'thumbnail_url' => $fileData['thumbnail_url'] ?? null,
             'video_id' => $fileData['id'] ?? null,
             'release_status' => $fileData['release_status'] ?? null,
             ...$fileData['metadata'] ?? [],
         ]);
+    }
 
-        return YAML::dump($meta);
+    /**
+     * Persist the data fields of a written .meta/ file that differ from the 3q
+     * values. Statamic rewrites the whole file on every asset save (and whenever
+     * it regenerates meta on its own), so storing it verbatim would freeze the
+     * asset: 3q changes and newly configured metadata fields would stop coming
+     * through. Keeping just the difference lets both coexist, permanently.
+     *
+     * @param  string  $metaPath  The .meta/ path being written.
+     * @param  string  $contents  The YAML content Statamic wrote.
+     */
+    private function storeMetaOverrides(string $metaPath, string $contents): void
+    {
+        $written = YAML::parse($contents)['data'] ?? [];
+        $generated = $this->buildMetaData($this->getCachedFileData($this->assetPathFromMeta($metaPath)));
+
+        $overrides = [];
+
+        foreach ($written as $key => $value) {
+            if (! array_key_exists($key, $generated) || $generated[$key] !== $value) {
+                $overrides[$key] = $value;
+            }
+        }
+
+        $cacheKey = $this->metaOverridesCacheKey($metaPath);
+
+        if ($overrides === []) {
+            $this->cache()->forget($cacheKey);
+
+            return;
+        }
+
+        $this->cache()->forever($cacheKey, $overrides);
+    }
+
+    /**
+     * Read the stored data overrides for a .meta/ path.
+     *
+     * @param  string  $metaPath  The .meta/ path to look up.
+     * @return array<string, mixed>
+     */
+    private function metaOverrides(string $metaPath): array
+    {
+        $overrides = $this->cache()->get($this->metaOverridesCacheKey($metaPath));
+
+        return is_array($overrides) ? $overrides : [];
     }
 
     /**
@@ -822,12 +882,6 @@ class ThreeQAdapter implements FilesystemAdapter
      */
     private function readMetaYaml(string $metaPath): string
     {
-        $edited = $this->cache()->get($this->metaEditCacheKey($metaPath));
-
-        if ($edited !== null) {
-            return $edited;
-        }
-
         $assetPath = $this->assetPathFromMeta($metaPath);
         $data = $this->getCachedFileData($assetPath);
 
@@ -835,7 +889,7 @@ class ThreeQAdapter implements FilesystemAdapter
             throw UnableToReadFile::fromLocation($metaPath, 'asset not found in listing cache');
         }
 
-        return $this->buildMetaYaml($data);
+        return $this->buildMetaYaml($data, $this->metaOverrides($metaPath));
     }
 
     /**
@@ -875,18 +929,13 @@ class ThreeQAdapter implements FilesystemAdapter
         // Get the current listing to discover all per-file cache keys.
         $listing = $this->cache()->get($this->cacheKey('listing')) ?? [];
 
-        // Forget embed-code and meta-edit keys derived from the listing.
-        foreach ($listing as $path => $fileData) {
-            $fileId = $fileData['id'] ?? null;
-
-            if ($fileId) {
+        // Forget the embed codes derived from the listing. Meta overrides are
+        // deliberately kept: they are editor input, not cached 3q data.
+        foreach ($listing as $fileData) {
+            if ($fileId = $fileData['id'] ?? null) {
                 $this->cache()->forget($this->cacheKey("embed_codes.{$fileId}"));
                 $flushed++;
             }
-
-            $metaPath = self::META_PREFIX.$path.self::META_SUFFIX;
-            $this->cache()->forget($this->metaEditCacheKey($metaPath));
-            $flushed++;
         }
 
         // Forget the listing itself.
@@ -962,8 +1011,8 @@ class ThreeQAdapter implements FilesystemAdapter
      *
      * @param  string  $metaPath  The .meta/ path whose user-edited content should be cached.
      */
-    private function metaEditCacheKey(string $metaPath): string
+    private function metaOverridesCacheKey(string $metaPath): string
     {
-        return $this->cacheKey('meta_edit.'.md5($metaPath));
+        return $this->cacheKey('meta_overrides.'.md5($metaPath));
     }
 }
