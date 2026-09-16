@@ -101,7 +101,7 @@ The adapter connects to the 3Q SDN REST API and implements `League\Flysystem\Fil
 | `readStream`                                         | For `.meta/` paths: streams the generated YAML. For asset paths: downloads the video thumbnail from 3Q for Statamic/Glide to cache. |
 | `delete`                                             | Accepted only for `.meta/` paths (no-op, virtual files have no remote counterpart). All other paths throw `UnableToDeleteFile`. |
 | `getUrl`                                             | Calls `GET /v2/projects/{id}/files/{fileId}/playouts/default/embed` and returns the full `FileEmbedCodes` array (e.g. `JavaScript`, `PlayerURL`). Cached per file ID via `VIDIQ_CACHE_TTL`. |
-| `write` / `writeStream`                              | Accepted only for `.meta/` paths (Statamic metadata edits stored in Laravel cache). All other writes throw `UnableToWriteFile`. |
+| `write` / `writeStream`                              | Accepted only for `.meta/` paths. Only the data fields that differ from the 3Q values are kept (permanently, in the vidiQ cache) and merged back in on read, so edits and 3Q updates coexist. All other writes throw `UnableToWriteFile`. |
 | `move`, `copy`, `createDirectory`, `deleteDirectory` | Not supported; throw the corresponding Flysystem exceptions.                                                                    |
 
 #### Path convention
