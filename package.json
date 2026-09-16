@@ -1,6 +1,6 @@
 {
     "name": "takepart-media-vidiq",
-    "version": "3.0.0",
+    "version": "3.1.0",
     "description": "Statamic vidiQ addon for 3q.video integration",
     "private": true,
     "type": "module",

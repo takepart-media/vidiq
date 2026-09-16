@@ -4,6 +4,7 @@ namespace TakepartMedia\Vidiq;
 
 use Illuminate\Support\Facades\Storage;
 use Statamic\Contracts\Assets\Asset;
+use Statamic\Contracts\Assets\AssetContainer;
 
 class Vidiq
 {
@@ -12,7 +13,15 @@ class Vidiq
      */
     public static function isVidiqAsset(Asset $asset): bool
     {
-        $disk = $asset->container()?->diskHandle();
+        return self::isVidiqContainer($asset->container());
+    }
+
+    /**
+     * Determine whether the given container is backed by a 3q disk.
+     */
+    public static function isVidiqContainer(?AssetContainer $container): bool
+    {
+        $disk = $container?->diskHandle();
 
         return $disk !== null && config("filesystems.disks.{$disk}.driver") === '3q';
     }

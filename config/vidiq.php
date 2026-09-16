@@ -68,4 +68,21 @@ return [
         'refresh_at' => env('VIDIQ_REFRESH_AT', '03:33'),
     ],
 
+    /*
+     * Extra 3q metadata fields to expose as Statamic asset data and to match in
+     * the control panel asset browser search, alongside the filename.
+     *
+     * Comma-separated 3q "Metadata" keys, e.g. "Category,Tags,Source,ProgramId".
+     * Each is stored under its snake_cased name (Category -> category), so it can
+     * be used as a blueprint field or a listing column. Array values (Category,
+     * People, ...) are flattened to their labels. Leave empty to disable.
+     *
+     * Changing this list requires a `vidiq:warm-cache --fresh`, because the
+     * fields are captured when the 3q listing is fetched.
+     */
+    'metadata_fields' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', (string) env('VIDIQ_METADATA_FIELDS', ''))
+    ))),
+
 ];

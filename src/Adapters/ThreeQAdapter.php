@@ -21,6 +21,8 @@ use League\Flysystem\UnableToReadFile;
 use League\Flysystem\UnableToRetrieveMetadata;
 use League\Flysystem\UnableToWriteFile;
 use League\Flysystem\Visibility;
+use Statamic\Facades\YAML;
+use Statamic\Support\Str;
 use TakepartMedia\Vidiq\Jobs\WarmCacheJob;
 
 /**
@@ -628,6 +630,7 @@ class ThreeQAdapter implements FilesystemAdapter
                     'duration' => $duration,
                     'width' => $width,
                     'height' => $height,
+                    'metadata' => $this->extraMetadata($metadata),
                 ];
             }
 
@@ -749,48 +752,65 @@ class ThreeQAdapter implements FilesystemAdapter
      */
     private function buildMetaYaml(array $fileData): string
     {
-        $lines = [];
+        // Statamic reads size/last_modified/width/height/duration as top-level meta
+        // keys (Asset::size(), ::width(), ...); everything else belongs under data.
+        $meta = array_filter([
+            'size' => $fileData['size'] ?? null,
+            'last_modified' => $fileData['timestamp'] ?? null,
+            'width' => isset($fileData['width']) ? (int) $fileData['width'] : null,
+            'height' => isset($fileData['height']) ? (int) $fileData['height'] : null,
+            'duration' => isset($fileData['duration']) ? (int) $fileData['duration'] : null,
+        ]);
 
-        if (isset($fileData['size'])) {
-            $lines[] = 'size: '.$fileData['size'];
+        $meta['mime_type'] = 'video/mp4';
+
+        $meta['data'] = array_filter([
+            'alt' => $fileData['title'] ?: ($fileData['name'] ?? ''),
+            'thumbnail_url' => $fileData['thumbnail_url'] ?? null,
+            'video_id' => $fileData['id'] ?? null,
+            'release_status' => $fileData['release_status'] ?? null,
+            ...$fileData['metadata'] ?? [],
+        ]);
+
+        return YAML::dump($meta);
+    }
+
+    /**
+     * Pick the 3q metadata fields configured in `vidiq.metadata_fields` and
+     * flatten them into searchable asset data keyed by their snake_cased name.
+     *
+     * @param  array<string, mixed>  $metadata  The "Metadata" block of a 3q file.
+     * @return array<string, string>
+     */
+    private function extraMetadata(array $metadata): array
+    {
+        $fields = [];
+
+        foreach (config('vidiq.metadata_fields', []) as $key) {
+            if ($value = $this->flattenMetadata($metadata[$key] ?? null)) {
+                $fields[Str::snake($key)] = $value;
+            }
         }
 
-        if (isset($fileData['timestamp'])) {
-            $lines[] = 'last_modified: '.$fileData['timestamp'];
+        return $fields;
+    }
+
+    /**
+     * Flatten a 3q metadata value to a string. 3q returns plain scalars (Source,
+     * ProgramId, Tags) as well as lists of labelled objects (Category, People).
+     *
+     * @param  mixed  $value  The raw metadata value.
+     */
+    private function flattenMetadata(mixed $value): ?string
+    {
+        if (is_array($value)) {
+            $value = implode(', ', array_filter(array_map(
+                fn ($item) => is_array($item) ? ($item['Label'] ?? $item['Title'] ?? $item['Name'] ?? null) : $item,
+                $value
+            ), fn ($item) => is_scalar($item) && (string) $item !== ''));
         }
 
-        // Statamic reads width/height/duration as top-level meta keys (Asset::width/height/duration).
-        if (! empty($fileData['width'])) {
-            $lines[] = 'width: '.(int) $fileData['width'];
-        }
-
-        if (! empty($fileData['height'])) {
-            $lines[] = 'height: '.(int) $fileData['height'];
-        }
-
-        if (! empty($fileData['duration'])) {
-            $lines[] = 'duration: '.(int) $fileData['duration'];
-        }
-
-        $lines[] = "mime_type: 'video/mp4'";
-        $lines[] = 'data:';
-
-        $title = $fileData['title'] ?: ($fileData['name'] ?? '');
-        $lines[] = "  alt: '".str_replace("'", "''", $title)."'";
-
-        if (! empty($fileData['thumbnail_url'])) {
-            $lines[] = "  thumbnail_url: '".str_replace("'", "''", $fileData['thumbnail_url'])."'";
-        }
-
-        if (! empty($fileData['id'])) {
-            $lines[] = "  video_id: '".$fileData['id']."'";
-        }
-
-        if (isset($fileData['release_status'])) {
-            $lines[] = "  release_status: '".$fileData['release_status']."'";
-        }
-
-        return implode("\n", $lines)."\n";
+        return is_scalar($value) && (string) $value !== '' ? (string) $value : null;
     }
 
     /**
