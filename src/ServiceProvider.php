@@ -11,10 +11,12 @@ use Illuminate\Support\Facades\Storage;
 use League\Flysystem\Filesystem;
 use Statamic\Contracts\Assets\Asset;
 use Statamic\Facades\Utility;
+use Statamic\Hooks\CP\AssetsIndexQuery;
 use Statamic\Http\Resources\CP\Assets\Asset as AssetResource;
 use Statamic\Http\Resources\CP\Assets\AssetsFieldtypeAsset;
 use Statamic\Http\Resources\CP\Assets\FolderAsset;
 use Statamic\Providers\AddonServiceProvider;
+use Statamic\Support\Str;
 use TakepartMedia\Vidiq\Adapters\ThreeQAdapter;
 use TakepartMedia\Vidiq\Console\Commands\WarmCacheCommand;
 use TakepartMedia\Vidiq\Fieldtypes\VidiqPlayer;
@@ -84,6 +86,7 @@ class ServiceProvider extends AddonServiceProvider
         $this->bootDiskDriver();
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'vidiq');
         $this->bootAssetThumbnails();
+        $this->bootAssetSearch();
         $this->bootCacheUtility();
         $this->scheduleRefresh();
     }
@@ -108,6 +111,40 @@ class ServiceProvider extends AddonServiceProvider
                 ->withoutOverlapping(15)
                 ->onOneServer()
                 ->runInBackground();
+        });
+    }
+
+    /**
+     * Match the configured 3q metadata fields alongside the filename when
+     * searching a 3q container in the control panel asset browser.
+     *
+     * Statamic only searches the asset path there (BrowserController::search),
+     * unless the container is wired to a search index — which would have to be
+     * rebuilt on every 3q change, since these assets never fire save events.
+     */
+    protected function bootAssetSearch(): void
+    {
+        AssetsIndexQuery::hook('query', function ($payload, $next) {
+            $fields = config('vidiq.metadata_fields', []);
+            $term = request('search');
+
+            if ($term && $fields && Vidiq::isVidiqContainer($payload->container)) {
+                // The conditions are grouped so the filters and query scopes that
+                // Statamic appends afterwards still narrow the whole result set.
+                //
+                // ponytail: rebuilding the query drops the folder scoping Statamic
+                // applied, which is a no-op for 3q containers (flat listing).
+                // Revisit if 3q ever grows folders.
+                $payload->query = $payload->container->queryAssets()->where(function ($query) use ($term, $fields) {
+                    $query->where('path', 'like', '%'.$term.'%');
+
+                    foreach ($fields as $field) {
+                        $query->orWhere(Str::snake($field), 'like', '%'.$term.'%');
+                    }
+                });
+            }
+
+            return $next($payload);
         });
     }
 

@@ -66,6 +66,9 @@ VIDIQ_PROJECT_ID=your-project-id-here
 # Optional — defaults shown
 VIDIQ_API_ENDPOINT=https://sdn.3qsdn.com/api
 VIDIQ_API_TIMEOUT=30
+
+# Optional — extra 3Q metadata to expose and search (see "Searchable 3Q metadata")
+VIDIQ_METADATA_FIELDS=Category,Tags,Source,ProgramId
 ```
 
 ### Asset container
@@ -197,6 +200,40 @@ fieldtype renders it as a coloured, translated badge — green for published, am
 draft — both as a table column in the asset browser and in the asset editor. Labels come from the addon's
 translations (`lang/{locale}/messages.php`).
 
+### Searchable 3Q metadata
+
+By default Statamic's asset browser only searches the file path, which for 3Q assets means the video title.
+`VIDIQ_METADATA_FIELDS` pulls additional fields out of the 3Q `Metadata` block, stores them as asset data and
+matches them in the CP search alongside the filename — in the asset browser as well as in the assets fieldtype.
+
+```env
+VIDIQ_METADATA_FIELDS=Category,Tags,Source,ProgramId
+```
+
+Each key is stored under its snake_cased name, so `Category` becomes `category` and `ProgramId` becomes
+`program_id`. Values that 3Q returns as lists of objects (`Category`, `People`, …) are flattened to their
+labels and joined with commas. Empty values are omitted, an empty variable disables the feature.
+
+The fields are captured while the 3Q listing is fetched, so **changing the list requires a cache refresh**:
+
+```bash
+php artisan vidiq:warm-cache --fresh   # re-fetch the listing with the new fields
+php artisan cache:clear                # drop Statamic's cached asset meta
+```
+
+Add a field to the blueprint to also show it as a column. Mark it `read_only`, because edits to asset meta are
+persisted by the adapter and would then shadow the value coming from 3Q:
+
+```yaml
+  -
+    handle: category
+    field:
+      type: text
+      display: Category
+      read_only: true
+      listable: true
+```
+
 ## Blade Component
 
 ### `<x-vidiq::embed>`
@@ -237,6 +274,7 @@ Embeds a 3Q video using one of three output methods. The method defaults to the 
 | `cache.permanent`       | `VIDIQ_CACHE_PERMANENT`| `false`                     | When `true`, caches are stored forever (ignores TTL)       |
 | `cache.prefix`          | —                      | `vidiq`                     | Prefix for all cache keys (scoped per project ID)          |
 | `embed_fallback_method` | `VIDIQ_FALLBACK_METHOD`| `JavaScript`                | Default embed method (`JavaScript`, `iFrame`, `PlayerURL`) |
+| `metadata_fields`       | `VIDIQ_METADATA_FIELDS`| —                           | Comma-separated 3Q metadata keys exposed as asset data and searched in the CP |
 
 ### `config/vidiq-disk.php` (addon)
 
