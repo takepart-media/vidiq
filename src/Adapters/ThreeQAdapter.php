@@ -21,9 +21,12 @@ use League\Flysystem\UnableToReadFile;
 use League\Flysystem\UnableToRetrieveMetadata;
 use League\Flysystem\UnableToWriteFile;
 use League\Flysystem\Visibility;
+use Statamic\Facades\Asset as AssetApi;
+use Statamic\Facades\AssetContainer;
 use Statamic\Facades\YAML;
 use Statamic\Support\Str;
 use TakepartMedia\Vidiq\Jobs\WarmCacheJob;
+use TakepartMedia\Vidiq\Vidiq;
 
 /**
  * Flysystem v3 adapter for the 3q. Video API.
@@ -633,11 +636,17 @@ class ThreeQAdapter implements FilesystemAdapter
                 ];
             }
 
-            $this->pruneRemovedFiles($listing);
+            $previous = $this->cache()->get($this->cacheKey('listing')) ?? [];
+
+            $this->pruneRemovedFiles($previous, $listing);
 
             $this->cacheStore($this->cacheKey('listing'), $listing);
             $this->cache()->forever($this->cacheKey('listing.refreshed_at'), time());
             $this->listingMemory = $listing;
+
+            // After the new listing is in place, so anything re-reading meta
+            // while we work picks up the fresh data rather than the old.
+            $this->forgetStaleAssetMeta($previous, $listing);
 
             return $listing;
         } catch (GuzzleException|\RuntimeException $e) {
@@ -650,12 +659,11 @@ class ThreeQAdapter implements FilesystemAdapter
      * no longer present in the fresh listing, so they don't accumulate forever
      * in a permanent cache store.
      *
+     * @param  array<string, array<string, mixed>>  $previous  The listing being replaced, keyed by path.
      * @param  array<string, array<string, mixed>>  $fresh  The newly fetched listing, keyed by path.
      */
-    private function pruneRemovedFiles(array $fresh): void
+    private function pruneRemovedFiles(array $previous, array $fresh): void
     {
-        $previous = $this->cache()->get($this->cacheKey('listing')) ?? [];
-
         // Embed codes are keyed by FileId (survives renames)...
         $staleIds = array_diff(array_column($previous, 'id'), array_column($fresh, 'id'));
 
@@ -666,6 +674,44 @@ class ThreeQAdapter implements FilesystemAdapter
         // ...while meta edits are keyed by path.
         foreach (array_keys(array_diff_key($previous, $fresh)) as $stalePath) {
             $this->cache()->forget($this->metaOverridesCacheKey(self::META_PREFIX.$stalePath.self::META_SUFFIX));
+        }
+    }
+
+    /**
+     * Forget Statamic's cached asset meta for videos whose 3q data changed.
+     *
+     * Statamic caches the parsed .meta/ file forever under `asset-meta-{id}` in
+     * its own store and has no way of knowing that our listing moved on, so a
+     * refreshed listing would otherwise stay invisible in the control panel
+     * until someone ran `cache:clear` or saved the asset.
+     *
+     * @param  array<string, array<string, mixed>>  $previous  The listing being replaced, keyed by path.
+     * @param  array<string, array<string, mixed>>  $fresh  The newly fetched listing, keyed by path.
+     */
+    private function forgetStaleAssetMeta(array $previous, array $fresh): void
+    {
+        $changed = [];
+
+        foreach ($previous as $path => $fileData) {
+            if (($fresh[$path] ?? null) !== $fileData) {
+                $changed[] = $path;
+            }
+        }
+
+        if ($changed === []) {
+            return;
+        }
+
+        $containers = AssetContainer::all()->filter(fn ($container) => Vidiq::isVidiqContainer($container));
+
+        foreach ($containers as $container) {
+            foreach ($changed as $path) {
+                // make() instead of asset(): it builds the same identity without
+                // hydrating the asset, which would read the meta we are dropping.
+                $asset = AssetApi::make()->path($path)->container($container);
+
+                $asset->cacheStore()->forget($asset->metaCacheKey());
+            }
         }
     }
 
